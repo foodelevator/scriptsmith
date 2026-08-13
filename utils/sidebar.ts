@@ -4,6 +4,7 @@ export interface SidebarScriptRequest {
   scriptId: string;
   origin: string;
   creating: boolean;
+  tabId: number;
   nonce: string;
 }
 
@@ -48,13 +49,13 @@ export async function showScriptSidebar(
 }
 
 export async function openScriptSidebar(
-  request: Omit<SidebarScriptRequest, 'nonce'>,
+  request: Omit<SidebarScriptRequest, 'nonce' | 'tabId'>,
   tabId: number,
   windowId?: number,
 ): Promise<void> {
   // Invoke open before awaiting storage so Chromium still considers this part
   // of the popup button's user gesture. The sidebar listens for the selection.
-  const selecting = selectScriptForSidebar(request);
+  const selecting = selectScriptForSidebar({ ...request, tabId });
   const opening = showScriptSidebar(tabId, windowId);
   await Promise.all([selecting, opening]);
 }

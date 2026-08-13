@@ -175,6 +175,66 @@ article.assistant p {
   background: #fff;
 }
 
+.apply-changes {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 9px 10px;
+  color: #1e3a8a;
+  background: #eff6ff;
+}
+
+.apply-changes strong {
+  font-size: 12px;
+}
+
+.apply-changes p {
+  margin-top: 2px;
+  color: #526581;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.apply-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.run-now,
+.reload {
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.run-now {
+  border: 1px solid #2563eb;
+  color: #2563eb;
+  background: #fff;
+}
+
+.reload {
+  border: 1px solid #2563eb;
+  color: #fff;
+  background: #2563eb;
+}
+
+.apply-status {
+  margin-bottom: 8px;
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: #166534;
+  background: #dcfce7;
+  font-size: 10px;
+}
+
 .composer-footer {
   display: flex;
   align-items: center;

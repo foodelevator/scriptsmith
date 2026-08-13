@@ -4,7 +4,11 @@
     chatWithScript,
     type ChatMessage,
   } from '../../utils/ai';
-  import { getPageScript, type PageScript } from '../../utils/scripts';
+  import {
+    getPageScript,
+    runPageScriptNow,
+    type PageScript,
+  } from '../../utils/scripts';
   import {
     SIDEBAR_REQUEST_STORAGE_KEY,
     type SidebarScriptRequest,
@@ -17,6 +21,9 @@
   let apiKey = '';
   let loading = true;
   let sending = false;
+  let applying = false;
+  let scriptChanged = false;
+  let applyStatus = '';
   let error = '';
   let messagesElement: HTMLElement;
 
@@ -42,7 +49,11 @@
         return;
       }
 
-      if (request?.nonce !== next.nonce) messages = [];
+      if (request?.nonce !== next.nonce) {
+        messages = [];
+        scriptChanged = false;
+        applyStatus = '';
+      }
       request = next;
       script = await getPageScript(next.origin, next.scriptId);
       if (!script) error = 'This script no longer exists.';
@@ -64,6 +75,7 @@
     draft = '';
 
     try {
+      const codeBefore = script.code;
       const result = await chatWithScript({
         apiKey,
         origin: request.origin,
@@ -72,11 +84,53 @@
         messages: conversation,
       });
       script = result.script;
+      if (result.script.code !== codeBefore) {
+        scriptChanged = true;
+        applyStatus = '';
+      }
       messages = [...messages, { role: 'assistant', content: result.message }];
     } catch (caught) {
       error = messageFor(caught);
     } finally {
       sending = false;
+    }
+  }
+
+  async function runNow(): Promise<void> {
+    if (!script || !request || applying) return;
+    applying = true;
+    error = '';
+    applyStatus = '';
+
+    try {
+      const result = await runPageScriptNow(script, request.tabId);
+      if (result) {
+        scriptChanged = false;
+        applyStatus = 'Current script run on the page.';
+      } else {
+        error = 'This browser cannot run the script immediately. Reload the page instead.';
+      }
+    } catch (caught) {
+      error = messageFor(caught);
+    } finally {
+      applying = false;
+    }
+  }
+
+  async function reloadPage(): Promise<void> {
+    if (!request || applying) return;
+    applying = true;
+    error = '';
+    applyStatus = '';
+
+    try {
+      await browser.tabs.reload(request.tabId);
+      scriptChanged = false;
+      applyStatus = 'Page reloaded with the current script.';
+    } catch (caught) {
+      error = messageFor(caught);
+    } finally {
+      applying = false;
     }
   }
 
@@ -162,6 +216,23 @@
     </section>
 
     <section class="composer">
+      {#if scriptChanged}
+        <div class="apply-changes" role="status">
+          <div>
+            <strong>Script updated</strong>
+            <p>Run it now, or reload for a clean application.</p>
+          </div>
+          <div class="apply-actions">
+            <button class="run-now" type="button" on:click={() => void runNow()} disabled={applying}>
+              {applying ? 'Applying…' : 'Run now'}
+            </button>
+            <button class="reload" type="button" on:click={() => void reloadPage()} disabled={applying}>
+              Reload page
+            </button>
+          </div>
+        </div>
+      {/if}
+      {#if applyStatus}<p class="apply-status" role="status">{applyStatus}</p>{/if}
       {#if !apiKey.trim()}
         <p class="key-required" role="status">Add your OpenAI API key in the Vibext popup to start chatting.</p>
       {/if}
@@ -171,7 +242,7 @@
         placeholder="Describe the change you want…"
         bind:value={draft}
         on:keydown={handleKeydown}
-        disabled={sending || !apiKey.trim()}
+        disabled={!apiKey.trim()}
       ></textarea>
       <div class="composer-footer">
         <span>Enter to send · Shift+Enter for newline</span>
