@@ -11,7 +11,7 @@ export default defineConfig({
     name: 'Vibext',
     description:
       'Prompt a chatbot to create and retain changes for web pages.',
-    permissions: ['activeTab', 'storage', 'userScripts'],
+    permissions: ['activeTab', 'scripting', 'storage', 'userScripts'],
     host_permissions: ['https://api.openai.com/*'],
   },
 });

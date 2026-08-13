@@ -140,6 +140,7 @@
           origin: request.origin,
           scriptId: request.scriptId,
           creating: request.creating,
+          tabId: request.tabId,
           messages: conversation,
         },
         {
@@ -310,6 +311,8 @@
                   <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18h6M10 22h4M8.5 15.5A7 7 0 1 1 15.5 15.5C14.5 16.3 14 17 14 18h-4c0-1-.5-1.7-1.5-2.5Z" /></svg>
                 {:else if activity.toolName === 'edit_script'}
                   <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Zm10-12 3 3" /></svg>
+                {:else if activity.toolName === 'find_elements' || activity.toolName === 'inspect_elements'}
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m16 16 5 5" /></svg>
                 {:else if activity.toolName === 'set_name'}
                   <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 13 13 20 4 11V4h7l9 9Z" /><circle cx="8.5" cy="8.5" r="1" /></svg>
                 {:else if activity.toolName === 'set_description'}
