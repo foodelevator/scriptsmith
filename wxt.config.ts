@@ -12,5 +12,6 @@ export default defineConfig({
     description:
       'Prompt a chatbot to create and retain changes for web pages.',
     permissions: ['activeTab', 'storage', 'userScripts'],
+    host_permissions: ['https://api.openai.com/*'],
   },
 });

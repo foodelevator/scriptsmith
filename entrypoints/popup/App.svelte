@@ -1,30 +1,27 @@
 <script lang="ts">
   import {
-    addPageScript,
     getScriptsForOrigin,
     originFromUrl,
     removePageScript,
-    runPageScriptNow,
     type PageScript,
   } from '../../utils/scripts';
+  import { API_KEY_STORAGE_KEY, createDraftScript } from '../../utils/ai';
+  import { openScriptSidebar } from '../../utils/sidebar';
 
-  let prompt = '';
   let scripts: PageScript[] = [];
   let origin: string | null = null;
   let tabId: number | null = null;
+  let windowId: number | undefined;
   let loading = true;
-  let saving = false;
+  let working = false;
+  let apiKey = '';
+  let showApiKey = false;
+  let apiSettingsOpen = false;
   let status = '';
   let error = '';
 
-  function scriptDescription(code: string): string {
-    const firstLine = code
-      .split('\n')
-      .map((line) => line.trim())
-      .find(Boolean);
-
-    if (!firstLine) return 'Custom page script';
-    return firstLine.length > 100 ? `${firstLine.slice(0, 97)}…` : firstLine;
+  function messageFor(caught: unknown): string {
+    return caught instanceof Error ? caught.message : String(caught);
   }
 
   async function loadPage(): Promise<void> {
@@ -32,9 +29,16 @@
     error = '';
 
     try {
-      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      const [tab, stored] = await Promise.all([
+        browser.tabs.query({ active: true, currentWindow: true }).then(([active]) => active),
+        browser.storage.local.get(API_KEY_STORAGE_KEY),
+      ]);
+      const storedApiKey = stored[API_KEY_STORAGE_KEY];
+      apiKey = typeof storedApiKey === 'string' ? storedApiKey : '';
+      apiSettingsOpen = !apiKey;
       origin = originFromUrl(tab?.url);
       tabId = tab?.id ?? null;
+      windowId = tab?.windowId;
 
       if (!origin) {
         error = 'Open a regular web page to manage scripts.';
@@ -49,37 +53,51 @@
     }
   }
 
-  function messageFor(caught: unknown): string {
-    return caught instanceof Error ? caught.message : String(caught);
+  async function saveApiKey(): Promise<void> {
+    error = '';
+    try {
+      const value = apiKey.trim();
+      if (value) await browser.storage.local.set({ [API_KEY_STORAGE_KEY]: value });
+      else await browser.storage.local.remove(API_KEY_STORAGE_KEY);
+      status = value ? 'OpenAI API key saved.' : 'OpenAI API key removed.';
+    } catch (caught) {
+      error = messageFor(caught);
+    }
   }
 
-  async function send(): Promise<void> {
-    const code = prompt.trim();
-    if (!code || !origin || tabId === null || saving) return;
-
-    saving = true;
+  async function openEditor(script: PageScript, creating: boolean): Promise<void> {
+    if (tabId === null || working) return;
+    working = true;
     error = '';
     status = '';
 
     try {
-      const number = scripts.length + 1;
-      const script = await addPageScript({
-        origin,
-        name: `Script ${number}`,
-        description: scriptDescription(code),
-        code,
-      });
-
-      scripts = [...scripts, script];
-      prompt = '';
-      const runResult = await runPageScriptNow(script, tabId);
-      status = runResult
-        ? `${script.name} saved and run.`
-        : `${script.name} saved. Reload the page to run it.`;
+      await openScriptSidebar(
+        { scriptId: script.id, origin: script.origin, creating },
+        tabId,
+        windowId,
+      );
+      window.close();
     } catch (caught) {
       error = messageFor(caught);
     } finally {
-      saving = false;
+      working = false;
+    }
+  }
+
+  async function addScript(): Promise<void> {
+    if (!origin || working) return;
+    working = true;
+    error = '';
+
+    try {
+      const script = await createDraftScript(origin);
+      scripts = [...scripts, script];
+      working = false;
+      await openEditor(script, true);
+    } catch (caught) {
+      error = messageFor(caught);
+      working = false;
     }
   }
 
@@ -93,13 +111,6 @@
       status = `${script.name} removed.`;
     } catch (caught) {
       error = messageFor(caught);
-    }
-  }
-
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      void send();
     }
   }
 
@@ -132,42 +143,53 @@
               <strong>{script.name}</strong>
               <p>{script.description}</p>
             </div>
-            <button
-              class="remove"
-              type="button"
-              aria-label={`Remove ${script.name}`}
-              title={`Remove ${script.name}`}
-              on:click={() => void remove(script)}
-            >×</button>
+            <div class="script-actions">
+              <button
+                class="edit-script"
+                type="button"
+                on:click={() => void openEditor(script, false)}
+                disabled={working}
+              >Edit script</button>
+              <button
+                class="remove"
+                type="button"
+                aria-label={`Remove ${script.name}`}
+                title={`Remove ${script.name}`}
+                on:click={() => void remove(script)}
+                disabled={working}
+              >×</button>
+            </div>
           </li>
         {/each}
       </ul>
     {/if}
   </section>
 
-  <section class="composer" aria-labelledby="new-script-heading">
-    <h2 id="new-script-heading">New script</h2>
-    <label for="prompt">JavaScript</label>
-    <textarea
-      id="prompt"
-      name="prompt"
-      placeholder="document.querySelector('.ad')?.remove();"
-      rows="6"
-      bind:value={prompt}
-      on:keydown={handleKeydown}
-      disabled={!origin || saving}
-    ></textarea>
+  <button
+    class="add-script"
+    type="button"
+    on:click={() => void addScript()}
+    disabled={!origin || tabId === null || working}
+  >{working ? 'Opening…' : 'Add script'}</button>
 
-    <div class="actions">
-      <span class="shortcut">Ctrl/⌘ + Enter</span>
-      <button
-        class="send"
-        type="button"
-        on:click={() => void send()}
-        disabled={!origin || !prompt.trim() || saving}
-      >{saving ? 'Saving…' : 'Send'}</button>
+  <details class="settings" bind:open={apiSettingsOpen}>
+    <summary>OpenAI API key</summary>
+    <div class="key-row">
+      <input
+        type={showApiKey ? 'text' : 'password'}
+        placeholder="sk-…"
+        autocomplete="off"
+        bind:value={apiKey}
+      />
+      <button class="secondary" type="button" on:click={() => (showApiKey = !showApiKey)}>
+        {showApiKey ? 'Hide' : 'Show'}
+      </button>
+      <button class="secondary save-key" type="button" on:click={() => void saveApiKey()}>
+        Save
+      </button>
     </div>
-  </section>
+    <p>Stored locally in this browser and sent only to OpenAI.</p>
+  </details>
 
   {#if error}<p class="message error" role="alert">{error}</p>{/if}
   {#if status}<p class="message success" role="status">{status}</p>{/if}

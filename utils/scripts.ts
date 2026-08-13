@@ -7,6 +7,10 @@ export interface PageScript {
   createdAt: number;
 }
 
+export type PageScriptChanges = Partial<
+  Pick<PageScript, 'name' | 'description' | 'code'>
+>;
+
 const STORAGE_KEY = 'pageScripts';
 const REGISTRATION_PREFIX = 'vibext-';
 
@@ -98,6 +102,14 @@ export async function getScriptsForOrigin(origin: string): Promise<PageScript[]>
   return scripts[origin] ?? [];
 }
 
+export async function getPageScript(
+  origin: string,
+  scriptId: string,
+): Promise<PageScript | null> {
+  const scripts = await getScriptsForOrigin(origin);
+  return scripts.find((script) => script.id === scriptId) ?? null;
+}
+
 export async function addPageScript(
   input: Pick<PageScript, 'origin' | 'name' | 'description' | 'code'>,
 ): Promise<PageScript> {
@@ -121,6 +133,34 @@ export async function addPageScript(
   }
 
   return script;
+}
+
+export async function updatePageScript(
+  script: PageScript,
+  changes: PageScriptChanges,
+): Promise<PageScript> {
+  const updated: PageScript = { ...script, ...changes };
+  const api = getUserScriptsApi();
+
+  // Updating the registration validates changed JavaScript before it is saved.
+  await api.update([registrationFor(updated)]);
+
+  try {
+    const stored = await readAllScripts();
+    const scriptsForOrigin = stored[script.origin] ?? [];
+    const index = scriptsForOrigin.findIndex((candidate) => candidate.id === script.id);
+    if (index === -1) throw new Error('The script no longer exists.');
+
+    stored[script.origin] = scriptsForOrigin.map((candidate) =>
+      candidate.id === script.id ? updated : candidate,
+    );
+    await writeAllScripts(stored);
+  } catch (error) {
+    await api.update([registrationFor(script)]);
+    throw error;
+  }
+
+  return updated;
 }
 
 export async function runPageScriptNow(

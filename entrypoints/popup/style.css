@@ -18,7 +18,7 @@ body {
 }
 
 button,
-textarea {
+input {
   font: inherit;
 }
 
@@ -56,7 +56,6 @@ h2 {
 header p,
 .empty,
 .script-details p,
-.shortcut,
 .message {
   color: #64748b;
   font-size: 12px;
@@ -94,7 +93,7 @@ header p {
 
 .script-list {
   display: grid;
-  max-height: 185px;
+  max-height: 260px;
   overflow: auto;
   margin: 0;
   padding: 0;
@@ -128,6 +127,29 @@ header p {
   line-height: 1.4;
 }
 
+.script-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.edit-script {
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  padding: 5px 8px;
+  color: #334155;
+  background: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.edit-script:hover:not(:disabled) {
+  border-color: #2563eb;
+  color: #1d4ed8;
+}
+
 .remove {
   border: 0;
   padding: 0 3px;
@@ -138,64 +160,84 @@ header p {
   line-height: 1;
 }
 
-.remove:hover {
+.remove:hover:not(:disabled) {
   color: #dc2626;
 }
 
-.composer {
+.add-script {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 15px;
+  color: #ffffff;
+  background: #2563eb;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.add-script:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.settings {
   border-top: 1px solid #e2e8f0;
-  padding-top: 14px;
+  padding-top: 12px;
 }
 
-label {
+.settings summary {
+  cursor: pointer;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
-textarea {
-  width: 100%;
-  min-height: 108px;
-  resize: vertical;
+.settings[open] summary {
+  margin-bottom: 8px;
+}
+
+.key-row {
+  display: flex;
+  gap: 6px;
+}
+
+.key-row input {
+  min-width: 0;
+  flex: 1;
   border: 1px solid #cbd5e1;
-  border-radius: 9px;
-  padding: 10px;
-  color: #0f172a;
-  background: #ffffff;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.5;
+  border-radius: 8px;
+  padding: 8px 9px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
 }
 
-textarea:focus {
+.key-row input:focus {
   border-color: #2563eb;
   outline: 3px solid #dbeafe;
 }
 
-.actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.send {
-  border: 0;
+.secondary {
+  border: 1px solid #cbd5e1;
   border-radius: 8px;
-  padding: 8px 15px;
-  color: #ffffff;
+  padding: 6px 9px;
+  color: #475569;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.save-key {
+  color: #fff;
+  border-color: #2563eb;
   background: #2563eb;
-  cursor: pointer;
-  font-weight: 600;
 }
 
-.send:hover:not(:disabled) {
-  background: #1d4ed8;
-}
-
-button:disabled,
-textarea:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
+.settings p {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 10px;
 }
 
 .message {
