@@ -27,6 +27,14 @@ export interface ScriptChatResponse {
   script: PageScript;
 }
 
+export interface ScriptChatCallbacks {
+  onTextDelta?(delta: string): void;
+  onThinkingStart?(itemId: string): void;
+  onThinkingDone?(itemId: string): void;
+  onToolCall?(callId: string, name: string): void;
+  onToolResult?(callId: string): void;
+}
+
 type ResponseInputItem = Record<string, unknown>;
 
 type ToolCall = ResponseInputItem & {
@@ -181,10 +189,122 @@ async function useTool(script: PageScript, call: ToolCall): Promise<PageScript> 
   }
 }
 
+function toolCallKey(item: Record<string, unknown>): string | null {
+  if (typeof item.call_id === 'string') return item.call_id;
+  if (typeof item.id === 'string') return item.id;
+  return null;
+}
+
+async function readResponseStream(
+  response: Response,
+  callbacks: ScriptChatCallbacks,
+): Promise<OpenAiResponse> {
+  if (!response.body) throw new Error('OpenAI returned an empty response stream.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const announcedTools = new Set<string>();
+  const announcedReasoning = new Set<string>();
+  let buffer = '';
+  let completed: OpenAiResponse | null = null;
+  let streamedText = false;
+
+  const handleEvent = (frame: string): void => {
+    const data = frame
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    if (!data || data === '[DONE]') return;
+
+    const event = JSON.parse(data) as Record<string, unknown>;
+    if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+      streamedText = true;
+      callbacks.onTextDelta?.(event.delta);
+    }
+
+    if (
+      event.type === 'response.output_item.added' ||
+      event.type === 'response.output_item.done'
+    ) {
+      const item = event.item;
+      if (item && typeof item === 'object') {
+        const outputItem = item as Record<string, unknown>;
+        const key = toolCallKey(outputItem);
+        if (
+          event.type === 'response.output_item.added' &&
+          outputItem.type === 'reasoning' &&
+          key &&
+          !announcedReasoning.has(key)
+        ) {
+          announcedReasoning.add(key);
+          callbacks.onThinkingStart?.(key);
+        }
+        if (
+          event.type === 'response.output_item.done' &&
+          outputItem.type === 'reasoning' &&
+          key
+        ) {
+          callbacks.onThinkingDone?.(key);
+        }
+        if (
+          event.type === 'response.output_item.added' &&
+          outputItem.type === 'function_call' &&
+          typeof outputItem.name === 'string' &&
+          key &&
+          !announcedTools.has(key)
+        ) {
+          announcedTools.add(key);
+          callbacks.onToolCall?.(key, outputItem.name);
+        }
+      }
+    }
+
+    if (event.type === 'response.completed' && event.response) {
+      completed = event.response as OpenAiResponse;
+    }
+    if (event.type === 'response.failed') {
+      const failed = event.response as OpenAiResponse | undefined;
+      throw new Error(failed?.error?.message ?? 'OpenAI could not complete the response.');
+    }
+    if (event.type === 'response.incomplete') {
+      const incomplete = event.response as OpenAiResponse | undefined;
+      throw new Error(
+        `OpenAI returned an incomplete response${incomplete?.incomplete_details?.reason ? `: ${incomplete.incomplete_details.reason}` : '.'}`,
+      );
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() ?? '';
+    for (const frame of frames) handleEvent(frame);
+    if (done) break;
+  }
+  if (buffer.trim()) handleEvent(buffer);
+  if (!completed) throw new Error('OpenAI closed the response stream unexpectedly.');
+  const finalResponse = completed as OpenAiResponse;
+
+  for (const item of finalResponse.output ?? []) {
+    if (!isToolCall(item)) continue;
+    const key = toolCallKey(item);
+    if (key && !announcedTools.has(key)) callbacks.onToolCall?.(key, item.name);
+  }
+  if (!streamedText) {
+    const text = outputText(finalResponse);
+    if (text) callbacks.onTextDelta?.(text);
+  }
+
+  return finalResponse;
+}
+
 async function createResponse(
   apiKey: string,
   instructions: string,
   input: ResponseInputItem[],
+  callbacks: ScriptChatCallbacks,
 ): Promise<OpenAiResponse> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
@@ -203,13 +323,23 @@ async function createResponse(
         input,
         tools,
         tool_choice: 'auto',
-        reasoning: { effort: 'high' },
+        reasoning: { effort: 'low' },
         store: false,
         // Required when statelessly passing reasoning items back after tools.
         include: ['reasoning.encrypted_content'],
+        stream: true,
       }),
       signal: controller.signal,
     });
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as OpenAiResponse | null;
+      throw new Error(
+        body?.error?.message ?? `OpenAI request failed (${response.status}).`,
+      );
+    }
+
+    return await readResponseStream(response, callbacks);
   } catch (error) {
     if (controller.signal.aborted) {
       throw new Error('OpenAI did not respond within 60 seconds. Try again.');
@@ -219,17 +349,6 @@ async function createResponse(
     clearTimeout(timeout);
   }
 
-  const body = (await response.json().catch(() => null)) as OpenAiResponse | null;
-  if (!response.ok) {
-    throw new Error(body?.error?.message ?? `OpenAI request failed (${response.status}).`);
-  }
-  if (!body) throw new Error('OpenAI returned an empty response.');
-  if (body.status === 'incomplete') {
-    throw new Error(
-      `OpenAI returned an incomplete response${body.incomplete_details?.reason ? `: ${body.incomplete_details.reason}` : '.'}`,
-    );
-  }
-  return body;
 }
 
 function isToolCall(item: ResponseOutputItem): item is ToolCall {
@@ -264,6 +383,7 @@ export async function createDraftScript(origin: string): Promise<PageScript> {
 
 export async function chatWithScript(
   request: ScriptChatRequest,
+  callbacks: ScriptChatCallbacks = {},
 ): Promise<ScriptChatResponse> {
   const apiKey = request.apiKey.trim();
   if (!apiKey) throw new Error('Add your OpenAI API key before chatting.');
@@ -283,7 +403,7 @@ export async function chatWithScript(
   let instructions = systemPrompt(script, request.creating);
 
   for (let turn = 0; turn < 10; turn += 1) {
-    const answer = await createResponse(apiKey, instructions, input);
+    const answer = await createResponse(apiKey, instructions, input, callbacks);
     const output = answer.output ?? [];
     const calls = output.filter(isToolCall);
 
@@ -326,6 +446,7 @@ export async function chatWithScript(
         };
       }
 
+      callbacks.onToolResult?.(call.call_id);
       input.push({
         type: 'function_call_output',
         call_id: call.call_id,

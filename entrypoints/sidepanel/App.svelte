@@ -14,9 +14,19 @@
     type SidebarScriptRequest,
   } from '../../utils/sidebar';
 
+  type Activity = {
+    id: string;
+    kind: 'thinking' | 'tool';
+    toolName?: string;
+    pending: boolean;
+  };
+  type DisplayMessage =
+    | ChatMessage
+    | { role: 'activity'; activities: Activity[] };
+
   let request: SidebarScriptRequest | null = null;
   let script: PageScript | null = null;
-  let messages: ChatMessage[] = [];
+  let messages: DisplayMessage[] = [];
   let draft = '';
   let apiKey = '';
   let loading = true;
@@ -70,25 +80,110 @@
 
     sending = true;
     error = '';
-    const conversation: ChatMessage[] = [...messages, { role: 'user', content }];
-    messages = conversation;
+    const conversation: ChatMessage[] = [
+      ...messages.filter(
+        (message): message is ChatMessage => message.role !== 'activity',
+      ),
+      { role: 'user', content },
+    ];
+    messages = [...messages, { role: 'user', content }];
     draft = '';
+    let assistantIndex: number | null = null;
+    let receivedText = false;
+
+    function addActivity(activity: Activity): void {
+      const last = messages[messages.length - 1];
+      if (last?.role === 'activity') {
+        const lastActivity = last.activities[last.activities.length - 1];
+        if (activity.kind === 'thinking' && lastActivity?.kind === 'thinking') {
+          messages = [
+            ...messages.slice(0, -1),
+            {
+              role: 'activity',
+              activities: [
+                ...last.activities.slice(0, -1),
+                activity,
+              ],
+            },
+          ];
+          return;
+        }
+
+        messages = [
+          ...messages.slice(0, -1),
+          { role: 'activity', activities: [...last.activities, activity] },
+        ];
+        return;
+      }
+
+      messages = [...messages, { role: 'activity', activities: [activity] }];
+    }
+
+    function finishActivity(id: string): void {
+      messages = messages.map((message) =>
+        message.role === 'activity'
+          ? {
+              ...message,
+              activities: message.activities.map((activity) =>
+                activity.id === id ? { ...activity, pending: false } : activity,
+              ),
+            }
+          : message,
+      );
+    }
 
     try {
       const codeBefore = script.code;
-      const result = await chatWithScript({
-        apiKey,
-        origin: request.origin,
-        scriptId: request.scriptId,
-        creating: request.creating,
-        messages: conversation,
-      });
+      const result = await chatWithScript(
+        {
+          apiKey,
+          origin: request.origin,
+          scriptId: request.scriptId,
+          creating: request.creating,
+          messages: conversation,
+        },
+        {
+          onThinkingStart(itemId) {
+            addActivity({ id: itemId, kind: 'thinking', pending: true });
+          },
+          onThinkingDone(itemId) {
+            finishActivity(itemId);
+          },
+          onToolCall(callId, name) {
+            addActivity({
+              id: callId,
+              kind: 'tool',
+              toolName: name,
+              pending: true,
+            });
+          },
+          onToolResult(callId) {
+            finishActivity(callId);
+          },
+          onTextDelta(delta) {
+            receivedText = true;
+            if (assistantIndex === null) {
+              assistantIndex = messages.length;
+              messages = [...messages, { role: 'assistant', content: delta }];
+              return;
+            }
+
+            messages = messages.map((message, index) =>
+              index === assistantIndex && message.role === 'assistant'
+                ? { ...message, content: `${message.content}${delta}` }
+                : message,
+            );
+          },
+        },
+      );
       script = result.script;
       if (result.script.code !== codeBefore) {
         scriptChanged = true;
         applyStatus = '';
       }
-      messages = [...messages, { role: 'assistant', content: result.message }];
+      if (!receivedText) {
+        messages = [...messages, { role: 'assistant', content: result.message }];
+      }
     } catch (caught) {
       error = messageFor(caught);
     } finally {
@@ -201,18 +296,37 @@
       {/if}
 
       {#each messages as message}
-        <article class:assistant={message.role === 'assistant'} class:user={message.role === 'user'}>
-          <span>{message.role === 'assistant' ? 'Agent' : 'You'}</span>
-          <p>{message.content}</p>
-        </article>
+        {#if message.role === 'activity'}
+          <div class="activity-row" aria-label="Agent activity">
+            {#each message.activities as activity (activity.id)}
+              {@const label = activity.kind === 'thinking' ? (activity.pending ? 'Thinking' : 'Thought') : `${activity.pending ? 'Using' : 'Used'} ${activity.toolName ?? 'tool'}`}
+              <span
+                class="activity"
+                class:pending={activity.pending}
+                aria-label={label}
+                title={label}
+              >
+                {#if activity.kind === 'thinking'}
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18h6M10 22h4M8.5 15.5A7 7 0 1 1 15.5 15.5C14.5 16.3 14 17 14 18h-4c0-1-.5-1.7-1.5-2.5Z" /></svg>
+                {:else if activity.toolName === 'edit_script'}
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Zm10-12 3 3" /></svg>
+                {:else if activity.toolName === 'set_name'}
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 13 13 20 4 11V4h7l9 9Z" /><circle cx="8.5" cy="8.5" r="1" /></svg>
+                {:else if activity.toolName === 'set_description'}
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9" /></svg>
+                {:else}
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" /><circle cx="12" cy="12" r="3" /></svg>
+                {/if}
+              </span>
+            {/each}
+          </div>
+        {:else}
+          <article class:assistant={message.role === 'assistant'} class:user={message.role === 'user'}>
+            <span>{message.role === 'assistant' ? 'Agent' : 'You'}</span>
+            <p>{message.content}</p>
+          </article>
+        {/if}
       {/each}
-
-      {#if sending}
-        <article class="assistant thinking">
-          <span>Agent</span>
-          <p>Working on the script…</p>
-        </article>
-      {/if}
     </section>
 
     <section class="composer">

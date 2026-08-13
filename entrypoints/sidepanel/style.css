@@ -164,9 +164,48 @@ article.assistant p {
   border-bottom-left-radius: 4px;
 }
 
-.thinking p {
-  color: #667085;
-  font-style: italic;
+.activity-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -3px 0 14px 4px;
+}
+
+.activity {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: #526078;
+  line-height: 1;
+}
+
+.activity svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.activity.pending {
+  animation: activity-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes activity-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.92);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .composer {
