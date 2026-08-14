@@ -38,10 +38,13 @@ export interface ScriptChatResponse {
 }
 
 export interface ScriptChatCallbacks {
+  onResponseStart?(): void;
   onTextDelta?(delta: string): void;
   onThinkingStart?(itemId: string): void;
   onThinkingDone?(itemId: string): void;
   onToolCall?(callId: string, name: string): void;
+  onToolCallDone?(callId: string): void;
+  onToolExecutionStart?(callId: string): void;
   onToolResult?(callId: string): void;
 }
 
@@ -65,6 +68,14 @@ interface OpenAiResponse {
   status?: string;
   incomplete_details?: { reason?: string } | null;
   error?: { message?: string } | null;
+}
+
+interface StreamedResponse {
+  response: OpenAiResponse;
+  // Tool calls retain their output order between stream events and the final
+  // response. IDs do not: Codex can expose an item id while writing a call and
+  // a different call_id once it is executable.
+  toolActivityKeys: string[];
 }
 
 const tools = [
@@ -323,25 +334,26 @@ async function useTool(
   }
 }
 
-function toolCallKey(item: Record<string, unknown>): string | null {
-  if (typeof item.call_id === 'string') return item.call_id;
+function responseItemKey(item: Record<string, unknown>): string | null {
   if (typeof item.id === 'string') return item.id;
+  if (typeof item.call_id === 'string') return item.call_id;
   return null;
 }
 
 async function readResponseStream(
   response: Response,
   callbacks: ScriptChatCallbacks,
-): Promise<OpenAiResponse> {
+): Promise<StreamedResponse> {
   if (!response.body) throw new Error('OpenAI returned an empty response stream.');
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const announcedTools = new Set<string>();
   const announcedReasoning = new Set<string>();
+  const toolKeysByOutputIndex = new Map<number, string>();
+  const streamedOutputByIndex = new Map<number, ResponseOutputItem>();
   let buffer = '';
   let completed: OpenAiResponse | null = null;
-  let streamedText = false;
 
   const handleEvent = (frame: string): void => {
     const data = frame
@@ -352,10 +364,6 @@ async function readResponseStream(
     if (!data || data === '[DONE]') return;
 
     const event = JSON.parse(data) as Record<string, unknown>;
-    if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
-      streamedText = true;
-      callbacks.onTextDelta?.(event.delta);
-    }
 
     if (
       event.type === 'response.output_item.added' ||
@@ -364,32 +372,59 @@ async function readResponseStream(
       const item = event.item;
       if (item && typeof item === 'object') {
         const outputItem = item as Record<string, unknown>;
-        const key = toolCallKey(outputItem);
+        const itemKey = responseItemKey(outputItem);
+        const outputIndex = typeof event.output_index === 'number'
+          ? event.output_index
+          : null;
+        if (
+          event.type === 'response.output_item.done' &&
+          outputIndex !== null
+        ) {
+          // The Codex backend can stream complete output items but omit them
+          // from response.completed.response.output. Retain the streamed
+          // items so tool calls and encrypted reasoning survive stateless
+          // follow-up requests.
+          streamedOutputByIndex.set(outputIndex, outputItem);
+        }
         if (
           event.type === 'response.output_item.added' &&
           outputItem.type === 'reasoning' &&
-          key &&
-          !announcedReasoning.has(key)
+          itemKey &&
+          !announcedReasoning.has(itemKey)
         ) {
-          announcedReasoning.add(key);
-          callbacks.onThinkingStart?.(key);
+          announcedReasoning.add(itemKey);
+          callbacks.onThinkingStart?.(itemKey);
         }
         if (
           event.type === 'response.output_item.done' &&
           outputItem.type === 'reasoning' &&
-          key
+          itemKey
         ) {
-          callbacks.onThinkingDone?.(key);
+          callbacks.onThinkingDone?.(itemKey);
         }
-        if (
-          event.type === 'response.output_item.added' &&
-          outputItem.type === 'function_call' &&
-          typeof outputItem.name === 'string' &&
-          key &&
-          !announcedTools.has(key)
-        ) {
-          announcedTools.add(key);
-          callbacks.onToolCall?.(key, outputItem.name);
+        if (outputItem.type === 'function_call') {
+          const activityKey =
+            (outputIndex === null ? undefined : toolKeysByOutputIndex.get(outputIndex)) ??
+            itemKey;
+          if (activityKey && outputIndex !== null) {
+            toolKeysByOutputIndex.set(outputIndex, activityKey);
+          }
+          if (
+            activityKey &&
+            typeof outputItem.name === 'string' &&
+            !announcedTools.has(activityKey)
+          ) {
+            announcedTools.add(activityKey);
+            callbacks.onToolCall?.(activityKey, outputItem.name);
+          }
+          if (
+            event.type === 'response.output_item.done' &&
+            activityKey
+          ) {
+            // Argument generation has finished. Execution starts later, after
+            // the complete model response has been received.
+            callbacks.onToolCallDone?.(activityKey);
+          }
         }
       }
     }
@@ -423,25 +458,35 @@ async function readResponseStream(
   if (buffer.trim()) handleEvent(buffer);
   if (!completed) throw new Error('Codex closed the response stream unexpectedly.');
   const finalResponse = completed as OpenAiResponse;
+  if (streamedOutputByIndex.size > 0) {
+    const mergedOutput = [...(finalResponse.output ?? [])];
+    for (const [index, item] of streamedOutputByIndex) {
+      if (mergedOutput[index] === undefined) mergedOutput[index] = item;
+    }
+    finalResponse.output = mergedOutput.filter(
+      (item): item is ResponseOutputItem => item !== undefined,
+    );
+  }
 
-  for (const item of finalResponse.output ?? []) {
+  const toolActivityKeys: string[] = [];
+  for (const [index, item] of (finalResponse.output ?? []).entries()) {
     if (!isToolCall(item)) continue;
-    const key = toolCallKey(item);
-    if (key && !announcedTools.has(key)) callbacks.onToolCall?.(key, item.name);
+    const activityKey = toolKeysByOutputIndex.get(index) ?? responseItemKey(item);
+    if (!activityKey) continue;
+    if (!announcedTools.has(activityKey)) {
+      announcedTools.add(activityKey);
+      callbacks.onToolCall?.(activityKey, item.name);
+    }
+    toolActivityKeys.push(activityKey);
   }
-  if (!streamedText) {
-    const text = outputText(finalResponse);
-    if (text) callbacks.onTextDelta?.(text);
-  }
-
-  return finalResponse;
+  return { response: finalResponse, toolActivityKeys };
 }
 
 async function createResponse(
   instructions: string,
   input: ResponseInputItem[],
   callbacks: ScriptChatCallbacks,
-): Promise<OpenAiResponse> {
+): Promise<StreamedResponse> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
 
@@ -544,15 +589,25 @@ export async function chatWithScript(
   let namedScript = script.name !== 'Untitled script';
   let describedScript =
     script.description !== 'Describe what you want this script to do in the chat.';
+  // A newly-created draft can later be reopened through “Edit script”, which
+  // sets creating=false. Placeholder metadata and empty code are a more
+  // reliable indication that the draft still needs to be completed.
+  const completingDraft =
+    request.creating || (!editedCode && !namedScript && !describedScript);
 
   const input: ResponseInputItem[] = request.messages.map((message) => ({
     role: message.role,
     content: modelContent(message),
   }));
-  let instructions = systemPrompt(script, request.creating);
+  let instructions = systemPrompt(script, completingDraft);
 
   for (let turn = 0; turn < 10; turn += 1) {
-    const answer = await createResponse(instructions, input, callbacks);
+    // Every tool from the previous response has completed before another
+    // response can begin. This also gives the UI a definitive recovery point
+    // if Codex changed an activity identifier mid-stream.
+    callbacks.onResponseStart?.();
+    const streamed = await createResponse(instructions, input, callbacks);
+    const answer = streamed.response;
     const output = answer.output ?? [];
     const calls = output.filter(isToolCall);
 
@@ -562,20 +617,25 @@ export async function chatWithScript(
 
     if (calls.length === 0) {
       const creationIncomplete =
-        request.creating &&
-        (!editedCode || !namedScript || !describedScript);
+        completingDraft && (!editedCode || !namedScript || !describedScript);
       if (creationIncomplete) {
-        instructions = `${systemPrompt(script, request.creating)}\n\nThe new script is not complete yet. You must edit its code and set both a new useful name and a new useful description with the available tools before replying.`;
+        instructions = `${systemPrompt(script, completingDraft)}\n\nThe new script is not complete yet. You must edit its code and set both a new useful name and a new useful description with the available tools before replying.`;
         continue;
       }
 
-      return {
-        message: outputText(answer) || 'Done.',
-        script,
-      };
+      const message = outputText(answer) || 'Done.';
+      // Only publish text from the accepted terminal response. Intermediate
+      // responses may say “Done” before mandatory draft edits are complete or
+      // alongside tool calls; displaying those makes the agent look finished
+      // while it is still working.
+      callbacks.onTextDelta?.(message);
+      return { message, script };
     }
 
-    for (const call of calls) {
+    for (const [callIndex, call] of calls.entries()) {
+      const activityKey =
+        streamed.toolActivityKeys[callIndex] ?? responseItemKey(call) ?? call.call_id;
+      callbacks.onToolExecutionStart?.(activityKey);
       let result: Record<string, unknown>;
       try {
         const used = await useTool(script, call, request.tabId);
@@ -591,7 +651,7 @@ export async function chatWithScript(
         };
       }
 
-      callbacks.onToolResult?.(call.call_id);
+      callbacks.onToolResult?.(activityKey);
       input.push({
         type: 'function_call_output',
         call_id: call.call_id,
@@ -599,7 +659,7 @@ export async function chatWithScript(
       });
     }
 
-    instructions = systemPrompt(script, request.creating);
+    instructions = systemPrompt(script, completingDraft);
   }
 
   throw new Error('The agent used too many tool calls. Try a more focused request.');

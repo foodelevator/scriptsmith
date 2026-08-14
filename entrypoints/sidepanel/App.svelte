@@ -220,14 +220,32 @@
       messages = [...messages, { role: 'activity', activities: [activity] }];
     }
 
-    function finishActivity(id: string): void {
+    function setActivityPending(id: string, pending: boolean): void {
       messages = messages.map((message) =>
         message.role === 'activity'
           ? {
               ...message,
               activities: message.activities.map((activity) =>
-                activity.id === id ? { ...activity, pending: false } : activity,
+                activity.id === id ? { ...activity, pending } : activity,
               ),
+            }
+          : message,
+      );
+    }
+
+    function finishActivity(id: string): void {
+      setActivityPending(id, false);
+    }
+
+    function finishAllActivities(): void {
+      messages = messages.map((message) =>
+        message.role === 'activity'
+          ? {
+              ...message,
+              activities: message.activities.map((activity) => ({
+                ...activity,
+                pending: false,
+              })),
             }
           : message,
       );
@@ -244,6 +262,9 @@
           messages: conversation,
         },
         {
+          onResponseStart() {
+            finishAllActivities();
+          },
           onThinkingStart(itemId) {
             addActivity({ id: itemId, kind: 'thinking', pending: true });
           },
@@ -257,6 +278,12 @@
               toolName: name,
               pending: true,
             });
+          },
+          onToolCallDone(callId) {
+            finishActivity(callId);
+          },
+          onToolExecutionStart(callId) {
+            setActivityPending(callId, true);
           },
           onToolResult(callId) {
             finishActivity(callId);
@@ -288,6 +315,10 @@
     } catch (caught) {
       error = messageFor(caught);
     } finally {
+      // Individual tools are settled by onToolResult as soon as each one
+      // finishes. This is a safety net for aborted/malformed streams: once the
+      // turn has ended, nothing from it should remain visually “running”.
+      finishAllActivities();
       sending = false;
     }
   }
