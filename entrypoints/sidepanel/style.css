@@ -16,6 +16,7 @@ body,
 #app {
   height: 100%;
   margin: 0;
+  overflow-x: hidden;
 }
 
 button,
@@ -36,14 +37,20 @@ textarea:disabled {
 main {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
   height: 100%;
-  min-width: 300px;
+  min-width: 0;
 }
 
 header {
+  min-width: 0;
   padding: 18px 18px 14px;
   border-bottom: 1px solid #e1e6ef;
   background: #fff;
+}
+
+header > div {
+  min-width: 0;
 }
 
 .eyebrow {
@@ -71,6 +78,43 @@ header p {
   color: #667085;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.script-source {
+  width: 100%;
+  min-width: 0;
+  margin-top: 10px;
+}
+
+.script-source summary {
+  width: fit-content;
+  color: #526078;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  user-select: none;
+}
+
+.script-source summary:hover {
+  color: #2563eb;
+}
+
+.script-source pre {
+  width: 100%;
+  max-width: 100%;
+  max-height: 240px;
+  margin: 8px 0 0;
+  overflow: auto;
+  border: 1px solid #dfe4ec;
+  border-radius: 8px;
+  padding: 10px;
+  color: #334155;
+  background: #f8fafc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
 }
 
 .composer-footer span {

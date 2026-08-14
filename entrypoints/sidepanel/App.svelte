@@ -274,7 +274,13 @@
     <div>
       <span class="eyebrow">Vibext agent</span>
       <h1>{script?.name ?? 'Script editor'}</h1>
-      {#if script}<p>{script.description}</p>{/if}
+      {#if script}
+        <p>{script.description}</p>
+        <details class="script-source">
+          <summary>View code</summary>
+          <pre><code>{script.code}</code></pre>
+        </details>
+      {/if}
     </div>
   </header>
 
