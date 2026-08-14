@@ -1,8 +1,11 @@
 const INSPECT_MESSAGE = 'vibext:inspect-elements';
 const FIND_MESSAGE = 'vibext:find-elements';
+const START_SELECTION_MESSAGE = 'vibext:start-element-selection';
+const CANCEL_SELECTION_MESSAGE = 'vibext:cancel-element-selection';
 const MAX_RESULTS = 10;
 const MAX_SCANNED_ELEMENTS = 20_000;
 const MAX_HTML_PER_RESULT = 6_000;
+const MAX_SELECTED_HTML = 2_000;
 const SEMANTIC_TARGETS = [
   'a',
   'button',
@@ -34,7 +37,19 @@ interface FindMessage {
   query: string;
 }
 
-type PageMessage = InspectionMessage | FindMessage;
+interface StartSelectionMessage {
+  type: typeof START_SELECTION_MESSAGE;
+}
+
+interface CancelSelectionMessage {
+  type: typeof CANCEL_SELECTION_MESSAGE;
+}
+
+type PageMessage =
+  | InspectionMessage
+  | FindMessage
+  | StartSelectionMessage
+  | CancelSelectionMessage;
 
 function comment(value: string): string {
   return value.replaceAll('--', '—').replaceAll('>', '&gt;');
@@ -166,6 +181,197 @@ function inspectElements(selector: string): string {
   );
 }
 
+interface ActivePicker {
+  cancel(): void;
+}
+
+let activePicker: ActivePicker | null = null;
+
+function elementLabel(element: Element): string {
+  let label = element.tagName.toLowerCase();
+  if (element.id) label += `#${element.id}`;
+  for (const className of Array.from(element.classList).slice(0, 2)) {
+    label += `.${className}`;
+  }
+
+  const accessibleText = normalizedText(
+    element.getAttribute('aria-label') ||
+      element.getAttribute('title') ||
+      element.getAttribute('alt') ||
+      element.getAttribute('placeholder') ||
+      element.textContent,
+  );
+  if (accessibleText) {
+    label += ` “${accessibleText.slice(0, 80)}${accessibleText.length > 80 ? '…' : ''}”`;
+  }
+  return label;
+}
+
+function pickerOverlay(): {
+  host: HTMLElement;
+  box: HTMLElement;
+  tooltip: HTMLElement;
+} {
+  const host = document.createElement('div');
+  host.setAttribute('data-vibext-element-picker', '');
+  for (const [property, value] of Object.entries({
+    position: 'fixed',
+    inset: '0',
+    'z-index': '2147483647',
+    'pointer-events': 'none',
+  })) {
+    host.style.setProperty(property, value, 'important');
+  }
+
+  const shadow = host.attachShadow({ mode: 'closed' });
+  const style = document.createElement('style');
+  style.textContent = `
+    .box {
+      position: fixed;
+      display: none;
+      box-sizing: border-box;
+      border: 2px solid #2563eb;
+      border-radius: 3px;
+      background: rgb(37 99 235 / 16%);
+      box-shadow: 0 0 0 1px rgb(255 255 255 / 75%);
+    }
+    .tooltip {
+      position: fixed;
+      display: none;
+      max-width: min(360px, calc(100vw - 16px));
+      overflow: hidden;
+      border-radius: 4px;
+      padding: 4px 7px;
+      color: white;
+      background: #172033;
+      font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  `;
+  const box = document.createElement('div');
+  box.className = 'box';
+  const tooltip = document.createElement('div');
+  tooltip.className = 'tooltip';
+  shadow.append(style, box, tooltip);
+  (document.documentElement || document.body).append(host);
+  return { host, box, tooltip };
+}
+
+function startElementSelection(): Promise<Record<string, unknown>> {
+  activePicker?.cancel();
+
+  return new Promise((resolve) => {
+    const { host, box, tooltip } = pickerOverlay();
+    let hovered: Element | null = null;
+    let finished = false;
+
+    const draw = (): void => {
+      if (!hovered || !hovered.isConnected) {
+        box.style.display = 'none';
+        tooltip.style.display = 'none';
+        return;
+      }
+
+      const rect = hovered.getBoundingClientRect();
+      box.style.display = 'block';
+      box.style.left = `${rect.left}px`;
+      box.style.top = `${rect.top}px`;
+      box.style.width = `${rect.width}px`;
+      box.style.height = `${rect.height}px`;
+
+      tooltip.textContent = elementLabel(hovered);
+      tooltip.style.display = 'block';
+      tooltip.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - 368))}px`;
+      tooltip.style.top = `${rect.top >= 30 ? rect.top - 27 : Math.min(innerHeight - 25, rect.bottom + 5)}px`;
+    };
+
+    const targetFromEvent = (event: Event): Element | null => {
+      const pathTarget = event.composedPath()[0];
+      if (!(pathTarget instanceof Element)) return null;
+      let target: Element = pathTarget;
+
+      // document.querySelector cannot address descendants inside a shadow root.
+      // Promote those descendants to the nearest host so the returned selector
+      // is something the agent can inspect and use in a page script.
+      while (target.getRootNode() instanceof ShadowRoot) {
+        target = (target.getRootNode() as ShadowRoot).host;
+      }
+      return target.closest('[data-vibext-element-picker]') ? null : target;
+    };
+
+    const hover = (event: Event): void => {
+      const target = targetFromEvent(event);
+      if (!target || target === hovered) return;
+      hovered = target;
+      draw();
+    };
+
+    const blockPointerAction = (event: Event): void => {
+      hover(event);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    const cleanup = (): void => {
+      document.removeEventListener('pointermove', hover, true);
+      document.removeEventListener('pointerdown', blockPointerAction, true);
+      document.removeEventListener('mousedown', blockPointerAction, true);
+      document.removeEventListener('mouseup', blockPointerAction, true);
+      document.removeEventListener('click', select, true);
+      document.removeEventListener('keydown', keydown, true);
+      window.removeEventListener('scroll', draw, true);
+      window.removeEventListener('resize', draw, true);
+      host.remove();
+      if (activePicker === picker) activePicker = null;
+    };
+
+    const finish = (result: Record<string, unknown>): void => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const select = (event: Event): void => {
+      blockPointerAction(event);
+      if (!hovered) return;
+      const html = hovered.outerHTML;
+      finish({
+        ok: true,
+        origin: location.origin,
+        element: {
+          selector: selectorFor(hovered),
+          label: elementLabel(hovered),
+          html: html.length <= MAX_SELECTED_HTML
+            ? html
+            : `${html.slice(0, MAX_SELECTED_HTML)}<!-- truncated -->`,
+        },
+      });
+    };
+
+    const keydown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      finish({ ok: false, cancelled: true, origin: location.origin });
+    };
+
+    const picker: ActivePicker = {
+      cancel: () => finish({ ok: false, cancelled: true, origin: location.origin }),
+    };
+    activePicker = picker;
+    document.addEventListener('pointermove', hover, true);
+    document.addEventListener('pointerdown', blockPointerAction, true);
+    document.addEventListener('mousedown', blockPointerAction, true);
+    document.addEventListener('mouseup', blockPointerAction, true);
+    document.addEventListener('click', select, true);
+    document.addEventListener('keydown', keydown, true);
+    window.addEventListener('scroll', draw, true);
+    window.addEventListener('resize', draw, true);
+  });
+}
+
 function searchableValues(element: Element): string[] {
   const values = [
     element.getAttribute('aria-label'),
@@ -245,7 +451,9 @@ function isPageMessage(value: unknown): value is PageMessage {
   const message = value as Record<string, unknown>;
   return (
     (message.type === INSPECT_MESSAGE && typeof message.selector === 'string') ||
-    (message.type === FIND_MESSAGE && typeof message.query === 'string')
+    (message.type === FIND_MESSAGE && typeof message.query === 'string') ||
+    message.type === START_SELECTION_MESSAGE ||
+    message.type === CANCEL_SELECTION_MESSAGE
   );
 }
 
@@ -257,6 +465,12 @@ export default defineContentScript({
       if (!isPageMessage(message)) return undefined;
 
       try {
+        if (message.type === START_SELECTION_MESSAGE) return startElementSelection();
+        if (message.type === CANCEL_SELECTION_MESSAGE) {
+          activePicker?.cancel();
+          return Promise.resolve({ ok: true, origin: location.origin });
+        }
+
         return Promise.resolve({
           ok: true,
           origin: location.origin,

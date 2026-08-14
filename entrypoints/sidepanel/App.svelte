@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { chatWithScript, type ChatMessage } from '../../utils/ai';
+  import {
+    chatWithScript,
+    type ChatMessage,
+    type SelectedElementReference,
+  } from '../../utils/ai';
   import {
     CODEX_REFRESH_TOKEN_STORAGE_KEY,
     hasCodexSubscription,
@@ -24,6 +28,13 @@
   type DisplayMessage =
     | ChatMessage
     | { role: 'activity'; activities: Activity[] };
+  type ElementSelectionResponse = {
+    ok: boolean;
+    origin?: string;
+    cancelled?: boolean;
+    error?: string;
+    element?: SelectedElementReference;
+  };
 
   const tabIdParameter = new URLSearchParams(location.search).get('tabId');
   const panelTabId = tabIdParameter && /^\d+$/.test(tabIdParameter)
@@ -44,10 +55,79 @@
   let scriptChanged = false;
   let applyStatus = '';
   let error = '';
+  let selectedElement: SelectedElementReference | null = null;
+  let selectingElement = false;
+  let selectionRequestId = 0;
   let messagesElement: HTMLElement;
 
   function messageFor(caught: unknown): string {
     return caught instanceof Error ? caught.message : String(caught);
+  }
+
+  function isMissingContentScript(caught: unknown): boolean {
+    return /receiving end does not exist|could not establish connection/i.test(
+      messageFor(caught),
+    );
+  }
+
+  async function sendPageMessage(
+    tabId: number,
+    message: Record<string, string>,
+    injectIfMissing = false,
+  ): Promise<ElementSelectionResponse> {
+    try {
+      return await browser.tabs.sendMessage(tabId, message) as ElementSelectionResponse;
+    } catch (caught) {
+      if (!injectIfMissing || !isMissingContentScript(caught)) throw caught;
+      await browser.scripting.executeScript({
+        target: { tabId },
+        // @ts-expect-error WXT models this generated path as root-relative.
+        files: ['content-scripts/content.js'],
+      });
+      return await browser.tabs.sendMessage(tabId, message) as ElementSelectionResponse;
+    }
+  }
+
+  function cancelElementSelection(tabId: number): void {
+    void sendPageMessage(tabId, { type: 'vibext:cancel-element-selection' })
+      .catch(() => undefined);
+  }
+
+  async function toggleElementSelection(): Promise<void> {
+    if (!request) return;
+    const selectionTabId = request.tabId;
+    const selectionOrigin = request.origin;
+
+    if (selectingElement) {
+      selectionRequestId += 1;
+      selectingElement = false;
+      cancelElementSelection(selectionTabId);
+      return;
+    }
+
+    const currentRequestId = ++selectionRequestId;
+    selectingElement = true;
+    error = '';
+    try {
+      const response = await sendPageMessage(
+        selectionTabId,
+        { type: 'vibext:start-element-selection' },
+        true,
+      );
+      if (currentRequestId !== selectionRequestId) return;
+      if (response.origin !== selectionOrigin) {
+        throw new Error('The tab has navigated to a different origin. Reopen the script editor.');
+      }
+      if (response.ok && response.element) {
+        selectedElement = response.element;
+      } else if (!response.cancelled) {
+        throw new Error(response.error || 'Could not select an element.');
+      }
+    } catch (caught) {
+      if (currentRequestId === selectionRequestId) error = messageFor(caught);
+    } finally {
+      if (currentRequestId === selectionRequestId) selectingElement = false;
+    }
   }
 
   async function readRequest(): Promise<void> {
@@ -60,6 +140,10 @@
         | SidebarScriptRequest
         | undefined;
       if (!next) {
+        if (selectingElement && request) cancelElementSelection(request.tabId);
+        selectionRequestId += 1;
+        selectingElement = false;
+        selectedElement = null;
         request = null;
         script = null;
         error = 'Choose Add script or Edit script from the Vibext popup.';
@@ -67,6 +151,10 @@
       }
 
       if (request?.nonce !== next.nonce) {
+        if (selectingElement && request) cancelElementSelection(request.tabId);
+        selectionRequestId += 1;
+        selectingElement = false;
+        selectedElement = null;
         messages = [];
         scriptChanged = false;
         applyStatus = '';
@@ -83,17 +171,23 @@
 
   async function send(): Promise<void> {
     const content = draft.trim();
-    if (!content || !request || !script || sending) return;
+    if (!content || !request || !script || sending || selectingElement) return;
 
     sending = true;
     error = '';
+    const userMessage: ChatMessage = {
+      role: 'user',
+      content,
+      ...(selectedElement ? { selectedElement } : {}),
+    };
     const conversation: ChatMessage[] = [
       ...messages.filter(
         (message): message is ChatMessage => message.role !== 'activity',
       ),
-      { role: 'user', content },
+      userMessage,
     ];
-    messages = [...messages, { role: 'user', content }];
+    messages = [...messages, userMessage];
+    selectedElement = null;
     draft = '';
     let assistantIndex: number | null = null;
     let receivedText = false;
@@ -272,7 +366,10 @@
       }
     };
     browser.storage.onChanged.addListener(listener);
-    return () => browser.storage.onChanged.removeListener(listener);
+    return () => {
+      browser.storage.onChanged.removeListener(listener);
+      if (selectingElement && request) cancelElementSelection(request.tabId);
+    };
   });
 </script>
 
@@ -364,6 +461,23 @@
         <p class="auth-required" role="status">Sign in with ChatGPT in the Vibext popup to start chatting.</p>
       {/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
+      {#if selectedElement}
+        <div class="selected-element" role="status">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3v16l4.5-4.5L13 21l3-1.5-3.5-6H19L5 3Z" /></svg>
+          <div>
+            <span>Selected element</span>
+            <code title={selectedElement.selector}>{selectedElement.label}</code>
+          </div>
+          <button
+            type="button"
+            aria-label="Remove selected element"
+            title="Remove selected element"
+            on:click={() => selectedElement = null}
+          >×</button>
+        </div>
+      {:else if selectingElement}
+        <p class="selection-hint" role="status">Hover over the page, then click an element. Press Escape to cancel.</p>
+      {/if}
       <textarea
         rows="3"
         placeholder="Describe the change you want…"
@@ -372,12 +486,26 @@
         disabled={!signedIn}
       ></textarea>
       <div class="composer-footer">
-        <span>Enter to send · Shift+Enter for newline</span>
+        <div class="composer-tools">
+          <button
+            class="element-picker"
+            class:active={selectingElement}
+            type="button"
+            on:click={() => void toggleElementSelection()}
+            disabled={sending || !signedIn}
+            aria-pressed={selectingElement}
+            title={selectingElement ? 'Cancel element selection' : 'Select an element from the page'}
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3v16l4.5-4.5L13 21l3-1.5-3.5-6H19L5 3Z" /></svg>
+            {selectingElement ? 'Cancel' : 'Select element'}
+          </button>
+          <span>Enter to send · Shift+Enter for newline</span>
+        </div>
         <button
           class="send"
           type="button"
           on:click={() => void send()}
-          disabled={sending || !draft.trim() || !signedIn}
+          disabled={sending || selectingElement || !draft.trim() || !signedIn}
         >{sending ? 'Working…' : 'Send'}</button>
       </div>
     </section>

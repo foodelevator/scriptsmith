@@ -318,12 +318,127 @@ article.assistant p {
   font-size: 10px;
 }
 
+.selected-element {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 8px;
+  border: 1px solid #bfdbfe;
+  border-radius: 9px;
+  padding: 7px 8px;
+  color: #1e3a8a;
+  background: #eff6ff;
+}
+
+.selected-element > svg {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  fill: #dbeafe;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.selected-element > div {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.selected-element span {
+  color: #2563eb;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.selected-element code {
+  overflow: hidden;
+  color: #334155;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-element button {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 0 2px;
+  color: #526078;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.selected-element button:hover {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.selection-hint {
+  margin-bottom: 8px;
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: #1e40af;
+  background: #dbeafe;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .composer-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-top: 7px;
+}
+
+.composer-tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.element-picker {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #cbd3df;
+  border-radius: 7px;
+  padding: 6px 7px;
+  color: #526078;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.element-picker:hover:not(:disabled),
+.element-picker.active {
+  border-color: #2563eb;
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.element-picker svg {
+  width: 14px;
+  height: 14px;
+  fill: #eff6ff;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .send {
