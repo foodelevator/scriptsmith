@@ -4,11 +4,12 @@ export interface PageScript {
   name: string;
   description: string;
   code: string;
+  enabled: boolean;
   createdAt: number;
 }
 
 export type PageScriptChanges = Partial<
-  Pick<PageScript, 'name' | 'description' | 'code'>
+  Pick<PageScript, 'name' | 'description' | 'code' | 'enabled'>
 >;
 
 const STORAGE_KEY = 'pageScripts';
@@ -30,17 +31,23 @@ function getUserScriptsApi(): UserScriptsApi {
   return api;
 }
 
-function isPageScript(value: unknown): value is PageScript {
-  if (!value || typeof value !== 'object') return false;
+function normalizePageScript(value: unknown): PageScript | null {
+  if (!value || typeof value !== 'object') return null;
   const script = value as Partial<PageScript>;
-  return (
-    typeof script.id === 'string' &&
-    typeof script.origin === 'string' &&
-    typeof script.name === 'string' &&
-    typeof script.description === 'string' &&
-    typeof script.code === 'string' &&
-    typeof script.createdAt === 'number'
-  );
+  if (
+    typeof script.id !== 'string' ||
+    typeof script.origin !== 'string' ||
+    typeof script.name !== 'string' ||
+    typeof script.description !== 'string' ||
+    typeof script.code !== 'string' ||
+    (script.enabled !== undefined && typeof script.enabled !== 'boolean') ||
+    typeof script.createdAt !== 'number'
+  ) {
+    return null;
+  }
+
+  // Scripts saved before per-script toggles were introduced remain enabled.
+  return { ...script, enabled: script.enabled ?? true } as PageScript;
 }
 
 async function readAllScripts(): Promise<StoredScripts> {
@@ -52,7 +59,11 @@ async function readAllScripts(): Promise<StoredScripts> {
   return Object.fromEntries(
     Object.entries(stored as Record<string, unknown>).map(([origin, scripts]) => [
       origin,
-      Array.isArray(scripts) ? scripts.filter(isPageScript) : [],
+      Array.isArray(scripts)
+        ? scripts
+            .map(normalizePageScript)
+            .filter((script): script is PageScript => script !== null)
+        : [],
     ]),
   );
 }
@@ -116,6 +127,7 @@ export async function addPageScript(
   const script: PageScript = {
     ...input,
     id: crypto.randomUUID(),
+    enabled: true,
     createdAt: Date.now(),
   };
   const api = getUserScriptsApi();
@@ -139,41 +151,66 @@ export async function updatePageScript(
   script: PageScript,
   changes: PageScriptChanges,
 ): Promise<PageScript> {
-  const updated: PageScript = { ...script, ...changes };
+  const stored = await readAllScripts();
+  const scriptsForOrigin = stored[script.origin] ?? [];
+  const current = scriptsForOrigin.find((candidate) => candidate.id === script.id);
+  if (!current) throw new Error('The script no longer exists.');
+
+  // Merge into the stored version so a toggle made while the editor is open
+  // is not accidentally overwritten by a later code or metadata edit.
+  const updated: PageScript = { ...current, ...changes };
   const api = getUserScriptsApi();
 
-  // Updating the registration validates changed JavaScript before it is saved.
-  await api.update([registrationFor(updated)]);
+  if (current.enabled && updated.enabled) {
+    // Updating the registration validates changed JavaScript before it is saved.
+    await api.update([registrationFor(updated)]);
+  } else if (!current.enabled && updated.enabled) {
+    await api.register([registrationFor(updated)]);
+  } else if (current.enabled && !updated.enabled) {
+    await api.unregister({ ids: [registrationId(current.id)] });
+  }
 
+  stored[current.origin] = scriptsForOrigin.map((candidate) =>
+    candidate.id === current.id ? updated : candidate,
+  );
   try {
-    const stored = await readAllScripts();
-    const scriptsForOrigin = stored[script.origin] ?? [];
-    const index = scriptsForOrigin.findIndex((candidate) => candidate.id === script.id);
-    if (index === -1) throw new Error('The script no longer exists.');
-
-    stored[script.origin] = scriptsForOrigin.map((candidate) =>
-      candidate.id === script.id ? updated : candidate,
-    );
     await writeAllScripts(stored);
   } catch (error) {
-    await api.update([registrationFor(script)]);
+    if (current.enabled && updated.enabled) {
+      await api.update([registrationFor(current)]);
+    } else if (!current.enabled && updated.enabled) {
+      await api.unregister({ ids: [registrationId(current.id)] });
+    } else if (current.enabled && !updated.enabled) {
+      await api.register([registrationFor(current)]);
+    }
     throw error;
   }
 
   return updated;
 }
 
+export async function setPageScriptEnabled(
+  script: PageScript,
+  enabled: boolean,
+): Promise<PageScript> {
+  return updatePageScript(script, { enabled });
+}
+
 export async function runPageScriptNow(
   script: PageScript,
   tabId: number,
 ): Promise<string | null> {
+  const current = await getPageScript(script.origin, script.id);
+  if (!current) throw new Error('The script no longer exists.');
+  if (!current.enabled) throw new Error('Enable this script before running it.');
+
   const api = getUserScriptsApi();
 
   // execute() is newer than register(); older browsers will run it on reload.
   if (typeof api.execute !== 'function') return null;
 
   const results = await api.execute({
-    js: [{ code: executableCode(script) }],
+    js: [{ code: executableCode(current) }],
     target: { tabId },
   });
   const failed = results.find((result) => 'error' in result && result.error);
@@ -183,7 +220,9 @@ export async function runPageScriptNow(
 
 export async function removePageScript(script: PageScript): Promise<void> {
   const api = getUserScriptsApi();
-  await api.unregister({ ids: [registrationId(script.id)] });
+  if (script.enabled) {
+    await api.unregister({ ids: [registrationId(script.id)] });
+  }
 
   const stored = await readAllScripts();
   const remaining = (stored[script.origin] ?? []).filter(
@@ -199,7 +238,7 @@ export async function removePageScript(script: PageScript): Promise<void> {
 export async function syncRegisteredScripts(): Promise<void> {
   const api = getUserScriptsApi();
   const stored = await readAllScripts();
-  const expected = Object.values(stored).flat();
+  const expected = Object.values(stored).flat().filter((script) => script.enabled);
   const expectedIds = new Set(expected.map((script) => registrationId(script.id)));
   const registered = await api.getScripts();
   const registeredIds = new Set(registered.map((script) => script.id));

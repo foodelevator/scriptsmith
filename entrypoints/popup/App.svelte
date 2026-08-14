@@ -3,6 +3,7 @@
     getScriptsForOrigin,
     originFromUrl,
     removePageScript,
+    setPageScriptEnabled,
     type PageScript,
   } from '../../utils/scripts';
   import { createDraftScript } from '../../utils/ai';
@@ -16,6 +17,10 @@
     startCodexLogin,
     type CodexLoginState,
   } from '../../utils/codex-auth';
+  import {
+    getCodexUsage,
+    type CodexUsage,
+  } from '../../utils/codex-usage';
   import { openScriptSidebar } from '../../utils/sidebar';
 
   let scripts: PageScript[] = [];
@@ -24,14 +29,51 @@
   let windowId: number | undefined;
   let loading = true;
   let working = false;
+  let togglingScriptId: string | null = null;
   let signedIn = false;
   let signingIn = false;
   let loginState: CodexLoginState | null = null;
+  let codexUsage: CodexUsage | null = null;
+  let usageLoading = false;
+  let usageError = '';
   let status = '';
   let error = '';
 
   function messageFor(caught: unknown): string {
     return caught instanceof Error ? caught.message : String(caught);
+  }
+
+  function usageColor(remainingPercent: number): string {
+    if (remainingPercent > 80) return '#16a34a';
+    if (remainingPercent > 50) return '#2563eb';
+    if (remainingPercent > 20) return '#ca8a04';
+    return '#dc2626';
+  }
+
+  function resetLabel(resetAt: number | null): string {
+    if (resetAt === null) return '';
+    const minutes = Math.max(0, Math.ceil((resetAt - Date.now()) / 60_000));
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (hours < 24) return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
+    return remainingHours ? `${days}d ${remainingHours}h` : `${days}d`;
+  }
+
+  async function loadUsage(): Promise<void> {
+    if (!signedIn || usageLoading) return;
+    usageLoading = true;
+    usageError = '';
+    try {
+      codexUsage = await getCodexUsage();
+    } catch (caught) {
+      codexUsage = null;
+      usageError = messageFor(caught);
+    } finally {
+      usageLoading = false;
+    }
   }
 
   async function loadPage(): Promise<void> {
@@ -45,6 +87,7 @@
         getCodexLoginState(),
       ]);
       signedIn = nextSignedIn;
+      if (nextSignedIn) void loadUsage();
       loginState = nextLoginState;
       signingIn = nextLoginState?.status === 'pending';
       origin = originFromUrl(tab?.url);
@@ -102,6 +145,8 @@
       signedIn = false;
       signingIn = false;
       loginState = null;
+      codexUsage = null;
+      usageError = '';
       status = 'Signed out of ChatGPT.';
     } catch (caught) {
       error = messageFor(caught);
@@ -144,6 +189,31 @@
     }
   }
 
+  async function toggleScript(script: PageScript, enabled: boolean): Promise<void> {
+    if (togglingScriptId !== null) return;
+    error = '';
+    status = '';
+    togglingScriptId = script.id;
+    scripts = scripts.map((candidate) =>
+      candidate.id === script.id ? { ...candidate, enabled } : candidate,
+    );
+
+    try {
+      const updated = await setPageScriptEnabled(script, enabled);
+      scripts = scripts.map((candidate) =>
+        candidate.id === script.id ? updated : candidate,
+      );
+      status = `${script.name} ${enabled ? 'enabled' : 'disabled'}.`;
+    } catch (caught) {
+      scripts = scripts.map((candidate) =>
+        candidate.id === script.id ? script : candidate,
+      );
+      error = messageFor(caught);
+    } finally {
+      togglingScriptId = null;
+    }
+  }
+
   async function remove(script: PageScript): Promise<void> {
     error = '';
     status = '';
@@ -165,6 +235,10 @@
     ) => {
       if (areaName === 'local' && changes[CODEX_REFRESH_TOKEN_STORAGE_KEY]) {
         signedIn = typeof changes[CODEX_REFRESH_TOKEN_STORAGE_KEY].newValue === 'string';
+        if (!signedIn) {
+          codexUsage = null;
+          usageError = '';
+        }
       }
       if (areaName === 'session' && changes[CODEX_LOGIN_STATE_STORAGE_KEY]) {
         const next = changes[CODEX_LOGIN_STATE_STORAGE_KEY].newValue as
@@ -174,6 +248,7 @@
         signingIn = next?.status === 'pending';
         if (next?.status === 'complete') {
           signedIn = true;
+          void loadUsage();
           status = 'Signed in with ChatGPT.';
         } else if (next?.status === 'error') {
           error = next.error ?? 'ChatGPT sign-in failed.';
@@ -204,17 +279,29 @@
     {:else if scripts.length > 0}
       <ul class="script-list">
         {#each scripts as script (script.id)}
-          <li>
+          <li class:disabled-script={!script.enabled}>
             <div class="script-details">
               <strong>{script.name}</strong>
               <p>{script.description}</p>
             </div>
             <div class="script-actions">
+              <label class="script-toggle" title={`${script.enabled ? 'Disable' : 'Enable'} ${script.name}`}>
+                <span class="toggle-label">{script.enabled ? 'On' : 'Off'}</span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  checked={script.enabled}
+                  aria-label={`${script.enabled ? 'Disable' : 'Enable'} ${script.name}`}
+                  disabled={working || togglingScriptId !== null}
+                  on:change={(event) => void toggleScript(script, event.currentTarget.checked)}
+                />
+                <span class="toggle-track" aria-hidden="true"><span></span></span>
+              </label>
               <button
                 class="edit-script"
                 type="button"
                 on:click={() => void openEditor(script, false)}
-                disabled={working}
+                disabled={working || togglingScriptId !== null}
               >Edit script</button>
               <button
                 class="remove"
@@ -222,7 +309,7 @@
                 aria-label={`Remove ${script.name}`}
                 title={`Remove ${script.name}`}
                 on:click={() => void remove(script)}
-                disabled={working}
+                disabled={working || togglingScriptId !== null}
               >×</button>
             </div>
           </li>
@@ -235,15 +322,47 @@
     class="add-script"
     type="button"
     on:click={() => void addScript()}
-    disabled={!origin || tabId === null || working}
+    disabled={!origin || tabId === null || working || togglingScriptId !== null}
   >{working ? 'Opening…' : 'Add script'}</button>
 
   <section class="account" aria-labelledby="account-heading">
     <div class="section-heading">
       <h2 id="account-heading">Codex subscription</h2>
-      <span class:signed-in={signedIn} class="account-status">
-        {signedIn ? 'Signed in' : 'Not signed in'}
-      </span>
+      {#if signedIn}
+        {#if codexUsage}
+          <div
+            class="usage-ring"
+            style={`--usage-color: ${usageColor(codexUsage.remainingPercent)}`}
+            title={`${codexUsage.remainingPercent}% Codex usage left`}
+            role="img"
+            aria-label={`${codexUsage.remainingPercent}% Codex usage left`}
+          >
+            <svg aria-hidden="true" viewBox="0 0 36 36">
+              <circle class="usage-track" cx="18" cy="18" r="15.5" pathLength="100" />
+              <circle
+                class="usage-value"
+                cx="18"
+                cy="18"
+                r="15.5"
+                pathLength="100"
+                stroke-dasharray={`${codexUsage.remainingPercent} 100`}
+              />
+            </svg>
+          </div>
+          {#if resetLabel(codexUsage.limitingWindow.resetAt)}
+            <span class="usage-reset">
+              Resets in {resetLabel(codexUsage.limitingWindow.resetAt)}
+            </span>
+          {/if}
+        {:else}
+          <span
+            class="usage-placeholder"
+            class:loading={usageLoading}
+            class:usage-failed={usageError}
+            title={usageError || 'Loading Codex usage'}
+          ></span>
+        {/if}
+      {/if}
     </div>
     {#if signedIn}
       <div class="account-row">
@@ -283,7 +402,6 @@
         </button>
       </div>
     {/if}
-    <p class="storage-note">The refresh token is stored locally in this browser.</p>
   </section>
 
   {#if error}<p class="message error" role="alert">{error}</p>{/if}
