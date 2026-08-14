@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     chatWithScript,
+    ScriptChatAbortedError,
     type ChatMessage,
     type SelectedElementReference,
   } from '../../utils/ai';
@@ -51,6 +52,8 @@
   let signedIn = false;
   let loading = true;
   let sending = false;
+  let stopping = false;
+  let chatController: AbortController | null = null;
   let applying = false;
   let scriptChanged = false;
   let applyStatus = '';
@@ -131,6 +134,7 @@
   }
 
   async function readRequest(): Promise<void> {
+    chatController?.abort();
     loading = true;
     error = '';
 
@@ -174,6 +178,9 @@
     if (!content || !request || !script || sending || selectingElement) return;
 
     sending = true;
+    stopping = false;
+    const controller = new AbortController();
+    chatController = controller;
     error = '';
     const userMessage: ChatMessage = {
       role: 'user',
@@ -302,6 +309,7 @@
             );
           },
         },
+        controller.signal,
       );
       script = result.script;
       if (result.script.code !== codeBefore) {
@@ -312,14 +320,22 @@
         messages = [...messages, { role: 'assistant', content: result.message }];
       }
     } catch (caught) {
-      error = messageFor(caught);
+      if (!(caught instanceof ScriptChatAbortedError)) error = messageFor(caught);
     } finally {
       // Individual tools are settled by onToolResult as soon as each one
       // finishes. This is a safety net for aborted/malformed streams: once the
       // turn has ended, nothing from it should remain visually “running”.
       finishAllActivities();
+      if (chatController === controller) chatController = null;
       sending = false;
+      stopping = false;
     }
+  }
+
+  function stopSending(): void {
+    if (!sending || stopping) return;
+    stopping = true;
+    chatController?.abort();
   }
 
   async function runNow(): Promise<void> {
@@ -398,6 +414,7 @@
     browser.storage.onChanged.addListener(listener);
     return () => {
       browser.storage.onChanged.removeListener(listener);
+      chatController?.abort();
       if (selectingElement && request) cancelElementSelection(request.tabId);
     };
   });
@@ -538,10 +555,12 @@
         </div>
         <button
           class="send"
+          class:stop={sending}
           type="button"
-          on:click={() => void send()}
-          disabled={sending || selectingElement || !draft.trim() || !signedIn}
-        >{sending ? 'Working…' : 'Send'}</button>
+          on:click={() => sending ? stopSending() : void send()}
+          disabled={sending ? stopping : selectingElement || !draft.trim() || !signedIn}
+          aria-label={sending ? 'Stop agent request' : 'Send message'}
+        >{sending ? (stopping ? 'Stopping…' : 'Stop') : 'Send'}</button>
       </div>
     </section>
   {:else}

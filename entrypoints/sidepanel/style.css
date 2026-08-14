@@ -468,6 +468,14 @@ article.assistant p {
   background: #1d4ed8;
 }
 
+.send.stop {
+  background: #dc2626;
+}
+
+.send.stop:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
 .state {
   margin: 18px;
   padding: 14px;

@@ -49,6 +49,13 @@ export interface ScriptChatCallbacks {
   onToolResult?(callId: string): void;
 }
 
+export class ScriptChatAbortedError extends Error {
+  constructor() {
+    super('The request was stopped.');
+    this.name = 'ScriptChatAbortedError';
+  }
+}
+
 type ResponseInputItem = Record<string, unknown>;
 
 type ToolCall = ResponseInputItem & {
@@ -488,9 +495,17 @@ async function createResponse(
   instructions: string,
   input: ResponseInputItem[],
   callbacks: ScriptChatCallbacks,
+  signal?: AbortSignal,
 ): Promise<StreamedResponse> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+  let timedOut = false;
+  const abort = () => controller.abort();
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, OPENAI_TIMEOUT_MS);
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) controller.abort();
 
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -541,11 +556,13 @@ async function createResponse(
     throw new Error('ChatGPT authentication failed. Sign in again.');
   } catch (error) {
     if (controller.signal.aborted) {
+      if (!timedOut && signal?.aborted) throw new ScriptChatAbortedError();
       throw new Error('Codex did not respond within 60 seconds. Try again.');
     }
     throw error;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener('abort', abort);
   }
 }
 
@@ -582,10 +599,17 @@ export async function createDraftScript(origin: string): Promise<PageScript> {
 export async function chatWithScript(
   request: ScriptChatRequest,
   callbacks: ScriptChatCallbacks = {},
+  signal?: AbortSignal,
 ): Promise<ScriptChatResponse> {
   if (request.messages.length === 0) throw new Error('The conversation is empty.');
 
+  const throwIfAborted = (): void => {
+    if (signal?.aborted) throw new ScriptChatAbortedError();
+  };
+
+  throwIfAborted();
   let script = await getPageScript(request.origin, request.scriptId);
+  throwIfAborted();
   if (!script) throw new Error('The script no longer exists.');
 
   const input: ResponseInputItem[] = request.messages.map((message) => ({
@@ -599,7 +623,7 @@ export async function chatWithScript(
     // response can begin. This also gives the UI a definitive recovery point
     // if Codex changed an activity identifier mid-stream.
     callbacks.onResponseStart?.();
-    const streamed = await createResponse(instructions, input, callbacks);
+    const streamed = await createResponse(instructions, input, callbacks, signal);
     const answer = streamed.response;
     const output = answer.output ?? [];
     const calls = output.filter(isToolCall);
@@ -618,6 +642,7 @@ export async function chatWithScript(
     }
 
     for (const [callIndex, call] of calls.entries()) {
+      throwIfAborted();
       const activityKey =
         streamed.toolActivityKeys[callIndex] ?? responseItemKey(call) ?? call.call_id;
       callbacks.onToolExecutionStart?.(activityKey);
@@ -634,6 +659,7 @@ export async function chatWithScript(
       }
 
       callbacks.onToolResult?.(activityKey);
+      throwIfAborted();
       input.push({
         type: 'function_call_output',
         call_id: call.call_id,
