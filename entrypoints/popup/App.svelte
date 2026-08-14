@@ -21,7 +21,10 @@
     getCodexUsage,
     type CodexUsage,
   } from '../../utils/codex-usage';
-  import { openScriptSidebar } from '../../utils/sidebar';
+  import {
+    openScriptSidebar,
+    prepareScriptSidebar,
+  } from '../../utils/sidebar';
 
   let scripts: PageScript[] = [];
   let origin: string | null = null;
@@ -90,8 +93,12 @@
       if (nextSignedIn) void loadUsage();
       loginState = nextLoginState;
       signingIn = nextLoginState?.status === 'pending';
-      origin = originFromUrl(tab?.url);
-      tabId = tab?.id ?? null;
+      const nextOrigin = originFromUrl(tab?.url);
+      const nextTabId = tab?.id ?? null;
+      if (nextOrigin && nextTabId !== null) await prepareScriptSidebar(nextTabId);
+
+      origin = nextOrigin;
+      tabId = nextTabId;
       windowId = tab?.windowId;
 
       if (!origin) {

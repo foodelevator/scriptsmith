@@ -11,6 +11,7 @@
   } from '../../utils/scripts';
   import {
     SIDEBAR_REQUEST_STORAGE_KEY,
+    sidebarRequestStorageKey,
     type SidebarScriptRequest,
   } from '../../utils/sidebar';
 
@@ -23,6 +24,14 @@
   type DisplayMessage =
     | ChatMessage
     | { role: 'activity'; activities: Activity[] };
+
+  const tabIdParameter = new URLSearchParams(location.search).get('tabId');
+  const panelTabId = tabIdParameter && /^\d+$/.test(tabIdParameter)
+    ? Number(tabIdParameter)
+    : null;
+  const requestStorageKey = panelTabId === null
+    ? SIDEBAR_REQUEST_STORAGE_KEY
+    : sidebarRequestStorageKey(panelTabId);
 
   let request: SidebarScriptRequest | null = null;
   let script: PageScript | null = null;
@@ -46,10 +55,8 @@
     error = '';
 
     try {
-      const stored = await browser.storage.session.get(
-        SIDEBAR_REQUEST_STORAGE_KEY,
-      );
-      const next = stored[SIDEBAR_REQUEST_STORAGE_KEY] as
+      const stored = await browser.storage.session.get(requestStorageKey);
+      const next = stored[requestStorageKey] as
         | SidebarScriptRequest
         | undefined;
       if (!next) {
@@ -256,8 +263,8 @@
         signedIn =
           typeof changes[CODEX_REFRESH_TOKEN_STORAGE_KEY].newValue === 'string';
       }
-      if (areaName === 'session' && changes[SIDEBAR_REQUEST_STORAGE_KEY]) {
-        const next = changes[SIDEBAR_REQUEST_STORAGE_KEY].newValue as
+      if (areaName === 'session' && changes[requestStorageKey]) {
+        const next = changes[requestStorageKey].newValue as
           | SidebarScriptRequest
           | undefined;
         if (next?.nonce === request?.nonce) return;
@@ -294,7 +301,7 @@
           <p>
             {request?.creating
               ? 'Describe the page behavior you want. The agent will write the script and choose a name and description.'
-              : 'Ask for a change. The agent will preserve the name and description unless you explicitly request otherwise.'}
+              : 'Describe the change you want, and the agent will update the script.'}
           </p>
         </div>
       {/if}
