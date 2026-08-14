@@ -257,7 +257,6 @@
         {
           origin: request.origin,
           scriptId: request.scriptId,
-          creating: request.creating,
           tabId: request.tabId,
           messages: conversation,
         },
@@ -425,12 +424,8 @@
     <section class="conversation" bind:this={messagesElement} aria-live="polite">
       {#if messages.length === 0}
         <div class="welcome">
-          <h2>{request?.creating ? 'What should this script do?' : 'How should I change it?'}</h2>
-          <p>
-            {request?.creating
-              ? 'Describe the page behavior you want. The agent will write the script and choose a name and description.'
-              : 'Describe the change you want, and the agent will update the script.'}
-          </p>
+          <h2>What should this script do?</h2>
+          <p>Describe the page behavior or change you want, and the agent will update the script.</p>
         </div>
       {/if}
 

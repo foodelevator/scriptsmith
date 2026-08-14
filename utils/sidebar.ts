@@ -13,7 +13,6 @@ function sidebarPathForTab(tabId: number): string {
 export interface SidebarScriptRequest {
   scriptId: string;
   origin: string;
-  creating: boolean;
   tabId: number;
   nonce: string;
 }

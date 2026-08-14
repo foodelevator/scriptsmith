@@ -160,7 +160,7 @@
     }
   }
 
-  async function openEditor(script: PageScript, creating: boolean): Promise<void> {
+  async function openEditor(script: PageScript): Promise<void> {
     if (tabId === null || working) return;
     working = true;
     error = '';
@@ -168,7 +168,7 @@
 
     try {
       await openScriptSidebar(
-        { scriptId: script.id, origin: script.origin, creating },
+        { scriptId: script.id, origin: script.origin },
         tabId,
         windowId,
       );
@@ -189,7 +189,7 @@
       const script = await createDraftScript(origin);
       scripts = [...scripts, script];
       working = false;
-      await openEditor(script, true);
+      await openEditor(script);
     } catch (caught) {
       error = messageFor(caught);
       working = false;
@@ -307,7 +307,7 @@
               <button
                 class="edit-script"
                 type="button"
-                on:click={() => void openEditor(script, false)}
+                on:click={() => void openEditor(script)}
                 disabled={working || togglingScriptId !== null}
               >Edit script</button>
               <button
