@@ -423,7 +423,6 @@
 <main>
   <header>
     <div>
-      <span class="eyebrow">Vibext agent</span>
       <h1>{script?.name ?? 'Script editor'}</h1>
       {#if script}
         <p>{script.description}</p>
@@ -475,7 +474,6 @@
           </div>
         {:else}
           <article class:assistant={message.role === 'assistant'} class:user={message.role === 'user'}>
-            <span>{message.role === 'assistant' ? 'Agent' : 'You'}</span>
             {#if message.role === 'user' && message.selectedElement}
               <div class="selected-element message-selected-element">
                 <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3v16l4.5-4.5L13 21l3-1.5-3.5-6H19L5 3Z" /></svg>
@@ -530,37 +528,46 @@
       {:else if selectingElement}
         <p class="selection-hint" role="status">Hover over the page, then click an element. Press Escape to cancel.</p>
       {/if}
-      <textarea
-        rows="3"
-        placeholder="Describe the change you want…"
-        bind:value={draft}
-        on:keydown={handleKeydown}
-        disabled={!signedIn}
-      ></textarea>
-      <div class="composer-footer">
-        <div class="composer-tools">
+      <div class="composer-box">
+        <textarea
+          rows="3"
+          placeholder="Describe the change you want…"
+          bind:value={draft}
+          on:keydown={handleKeydown}
+          disabled={!signedIn}
+        ></textarea>
+        <div class="composer-footer">
+          <div class="composer-tools">
+            <button
+              class="element-picker"
+              class:active={selectingElement}
+              type="button"
+              on:click={() => void toggleElementSelection()}
+              disabled={sending || !signedIn}
+              aria-pressed={selectingElement}
+              title={selectingElement ? 'Cancel element selection' : 'Select an element from the page'}
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3v16l4.5-4.5L13 21l3-1.5-3.5-6H19L5 3Z" /></svg>
+              {selectingElement ? 'Cancel' : 'Select element'}
+            </button>
+            <span>↵ send · ⇧↵ newline</span>
+          </div>
           <button
-            class="element-picker"
-            class:active={selectingElement}
+            class="send"
+            class:stop={sending}
             type="button"
-            on:click={() => void toggleElementSelection()}
-            disabled={sending || !signedIn}
-            aria-pressed={selectingElement}
-            title={selectingElement ? 'Cancel element selection' : 'Select an element from the page'}
+            on:click={() => sending ? stopSending() : void send()}
+            disabled={sending ? stopping : selectingElement || !draft.trim() || !signedIn}
+            aria-label={sending ? 'Stop agent request' : 'Send message'}
+            title={sending ? 'Stop agent request' : 'Send message'}
           >
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3v16l4.5-4.5L13 21l3-1.5-3.5-6H19L5 3Z" /></svg>
-            {selectingElement ? 'Cancel' : 'Select element'}
+            {#if sending}
+              <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+            {:else}
+              <svg aria-hidden="true" viewBox="0 0 24 24" class="send-arrow"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
+            {/if}
           </button>
-          <span>Enter to send · Shift+Enter for newline</span>
         </div>
-        <button
-          class="send"
-          class:stop={sending}
-          type="button"
-          on:click={() => sending ? stopSending() : void send()}
-          disabled={sending ? stopping : selectingElement || !draft.trim() || !signedIn}
-          aria-label={sending ? 'Stop agent request' : 'Send message'}
-        >{sending ? (stopping ? 'Stopping…' : 'Stop') : 'Send'}</button>
       </div>
     </section>
   {:else}

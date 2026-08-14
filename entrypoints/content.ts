@@ -230,20 +230,24 @@ function pickerOverlay(): {
       position: fixed;
       display: none;
       box-sizing: border-box;
-      border: 2px solid #2563eb;
-      border-radius: 3px;
-      background: rgb(37 99 235 / 16%);
-      box-shadow: 0 0 0 1px rgb(255 255 255 / 75%);
+      border: 1.5px solid #3b82f6;
+      border-radius: 4px;
+      background: rgb(59 130 246 / 14%);
+      box-shadow:
+        0 0 0 1px rgb(255 255 255 / 70%),
+        0 0 12px rgb(59 130 246 / 35%);
     }
     .tooltip {
       position: fixed;
       display: none;
       max-width: min(360px, calc(100vw - 16px));
       overflow: hidden;
-      border-radius: 4px;
-      padding: 4px 7px;
-      color: white;
-      background: #172033;
+      border: 1px solid rgb(255 255 255 / 12%);
+      border-radius: 6px;
+      padding: 5px 9px;
+      color: #f3f5f8;
+      background: rgb(21 24 32 / 94%);
+      box-shadow: 0 4px 14px rgb(0 0 0 / 30%);
       font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
       text-overflow: ellipsis;
       white-space: nowrap;

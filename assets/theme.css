@@ -1,0 +1,87 @@
+/* Shared design tokens and base styles for all Vibext UI surfaces. */
+:root {
+  color-scheme: light dark;
+
+  --bg: light-dark(#f6f7f9, #16181d);
+  --surface: light-dark(#ffffff, #1d2026);
+  --surface-2: light-dark(#f1f3f6, #262a31);
+  --surface-3: light-dark(#e9edf3, #2d323b);
+  --border: light-dark(#e3e7ed, #30343c);
+  --border-strong: light-dark(#c9d1dc, #454b56);
+
+  --text: light-dark(#1b2330, #e8eaed);
+  --text-secondary: light-dark(#3f4a5c, #b8bdc7);
+  --text-muted: light-dark(#68738a, #8e95a3);
+
+  --accent-text: light-dark(#2460e0, #8cb0ff);
+  --accent-bg: light-dark(#2563eb, #3565d6);
+  --accent-bg-hover: light-dark(#1d4ed8, #4675e4);
+  --on-accent: #ffffff;
+  --accent-subtle: light-dark(#eef4ff, rgb(120 155 255 / 10%));
+  --accent-border: light-dark(#c8dafc, rgb(130 160 255 / 28%));
+
+  --danger-text: light-dark(#b42323, #f19999);
+  --danger-subtle: light-dark(#fdecec, rgb(235 100 100 / 12%));
+  --danger-bg: light-dark(#dc2626, #c74444);
+  --danger-bg-hover: light-dark(#b91c1c, #d55555);
+
+  --success-text: light-dark(#15703c, #86d9a8);
+  --success-subtle: light-dark(#e8f7ee, rgb(80 200 130 / 12%));
+
+  --warning-text: light-dark(#8a5a0a, #e5c078);
+  --warning-subtle: light-dark(#fdf3dd, rgb(230 180 80 / 12%));
+
+  --usage-high: light-dark(#16a34a, #4ade80);
+  --usage-medium: var(--accent-text);
+  --usage-low: light-dark(#d97706, #fbbf24);
+  --usage-critical: light-dark(#dc2626, #f87171);
+
+  --focus: light-dark(rgb(37 99 235 / 28%), rgb(140 176 255 / 38%));
+  --shadow-sm: 0 1px 2px light-dark(rgb(16 24 40 / 6%), rgb(0 0 0 / 35%));
+
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+
+  color: var(--text);
+  background: var(--bg);
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+button:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

@@ -49,10 +49,10 @@
   }
 
   function usageColor(remainingPercent: number): string {
-    if (remainingPercent > 80) return '#16a34a';
-    if (remainingPercent > 50) return '#2563eb';
-    if (remainingPercent > 20) return '#ca8a04';
-    return '#dc2626';
+    if (remainingPercent > 80) return 'var(--usage-high)';
+    if (remainingPercent > 50) return 'var(--usage-medium)';
+    if (remainingPercent > 20) return 'var(--usage-low)';
+    return 'var(--usage-critical)';
   }
 
   function resetLabel(resetAt: number | null): string {
@@ -312,7 +312,6 @@
             </div>
             <div class="script-actions">
               <label class="script-toggle" title={`${script.enabled ? 'Disable' : 'Enable'} ${script.name}`}>
-                <span class="toggle-label">{script.enabled ? 'On' : 'Off'}</span>
                 <input
                   type="checkbox"
                   role="switch"
@@ -326,9 +325,11 @@
               <button
                 class="edit-script"
                 type="button"
+                aria-label={`Edit ${script.name}`}
+                title={`Edit ${script.name}`}
                 on:click={() => void openEditor(script)}
                 disabled={working || togglingScriptId !== null}
-              >Edit script</button>
+              >Edit</button>
               <button
                 class="remove"
                 type="button"
@@ -367,12 +368,14 @@
       <h2 id="account-heading">Codex subscription</h2>
       {#if signedIn}
         {#if codexUsage}
+          {@const reset = resetLabel(codexUsage.limitingWindow.resetAt)}
+          {@const usageLabel = `${codexUsage.remainingPercent}% Codex usage left${reset ? ` · resets in ${reset}` : ''}`}
           <div
             class="usage-ring"
             style={`--usage-color: ${usageColor(codexUsage.remainingPercent)}`}
-            title={`${codexUsage.remainingPercent}% Codex usage left`}
+            title={usageLabel}
             role="img"
-            aria-label={`${codexUsage.remainingPercent}% Codex usage left`}
+            aria-label={usageLabel}
           >
             <svg aria-hidden="true" viewBox="0 0 36 36">
               <circle class="usage-track" cx="18" cy="18" r="15.5" pathLength="100" />
@@ -386,11 +389,6 @@
               />
             </svg>
           </div>
-          {#if resetLabel(codexUsage.limitingWindow.resetAt)}
-            <span class="usage-reset">
-              Resets in {resetLabel(codexUsage.limitingWindow.resetAt)}
-            </span>
-          {/if}
         {:else}
           <span
             class="usage-placeholder"
@@ -403,7 +401,7 @@
     </div>
     {#if signedIn}
       <div class="account-row">
-        <p>Vibext uses your ChatGPT Codex subscription.</p>
+        <p>Signed in with ChatGPT.</p>
         <button class="secondary" type="button" on:click={() => void signOut()}>Sign out</button>
       </div>
     {:else if signingIn && loginState}
