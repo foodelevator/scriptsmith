@@ -385,6 +385,19 @@ article.assistant p {
   background: #fee2e2;
 }
 
+.message-selected-element {
+  max-width: 100%;
+  margin-bottom: 5px;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.message-selected-element > div > span {
+  margin: 0;
+  color: #2563eb;
+  text-align: left;
+}
+
 .selection-hint {
   margin-bottom: 8px;
   border-radius: 8px;

@@ -459,6 +459,15 @@
         {:else}
           <article class:assistant={message.role === 'assistant'} class:user={message.role === 'user'}>
             <span>{message.role === 'assistant' ? 'Agent' : 'You'}</span>
+            {#if message.role === 'user' && message.selectedElement}
+              <div class="selected-element message-selected-element">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3v16l4.5-4.5L13 21l3-1.5-3.5-6H19L5 3Z" /></svg>
+                <div>
+                  <span>Selected element</span>
+                  <code title={message.selectedElement.selector}>{message.selectedElement.label}</code>
+                </div>
+              </div>
+            {/if}
             <p>{message.content}</p>
           </article>
         {/if}

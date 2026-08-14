@@ -33,6 +33,8 @@
   let loading = true;
   let working = false;
   let togglingScriptId: string | null = null;
+  let reloadRequired = false;
+  let reloading = false;
   let signedIn = false;
   let signingIn = false;
   let loginState: CodexLoginState | null = null;
@@ -210,6 +212,7 @@
       scripts = scripts.map((candidate) =>
         candidate.id === script.id ? updated : candidate,
       );
+      reloadRequired = true;
       status = `${script.name} ${enabled ? 'enabled' : 'disabled'}.`;
     } catch (caught) {
       scripts = scripts.map((candidate) =>
@@ -218,6 +221,22 @@
       error = messageFor(caught);
     } finally {
       togglingScriptId = null;
+    }
+  }
+
+  async function reloadPage(): Promise<void> {
+    if (tabId === null || reloading) return;
+    reloading = true;
+    error = '';
+
+    try {
+      await browser.tabs.reload(tabId);
+      reloadRequired = false;
+      status = 'Page reloaded with the current script settings.';
+    } catch (caught) {
+      error = messageFor(caught);
+    } finally {
+      reloading = false;
     }
   }
 
@@ -324,6 +343,17 @@
       </ul>
     {/if}
   </section>
+
+  {#if reloadRequired}
+    <div class="reload-notice" role="status">
+      <p>Reload the page to apply the script changes.</p>
+      <button
+        type="button"
+        on:click={() => void reloadPage()}
+        disabled={reloading || togglingScriptId !== null}
+      >{reloading ? 'Reloading…' : 'Reload page'}</button>
+    </div>
+  {/if}
 
   <button
     class="add-script"
