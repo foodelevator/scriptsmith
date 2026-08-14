@@ -311,7 +311,7 @@ article.assistant p {
 }
 
 .composer > .error,
-.key-required {
+.auth-required {
   margin-bottom: 8px;
   padding: 8px 10px;
   border-radius: 8px;
@@ -323,7 +323,7 @@ article.assistant p {
   background: #fee2e2;
 }
 
-.key-required {
+.auth-required {
   color: #854d0e;
   background: #fef3c7;
 }

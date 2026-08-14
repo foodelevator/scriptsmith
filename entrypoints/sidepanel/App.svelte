@@ -1,9 +1,9 @@
 <script lang="ts">
+  import { chatWithScript, type ChatMessage } from '../../utils/ai';
   import {
-    API_KEY_STORAGE_KEY,
-    chatWithScript,
-    type ChatMessage,
-  } from '../../utils/ai';
+    CODEX_REFRESH_TOKEN_STORAGE_KEY,
+    hasCodexSubscription,
+  } from '../../utils/codex-auth';
   import {
     getPageScript,
     runPageScriptNow,
@@ -28,7 +28,7 @@
   let script: PageScript | null = null;
   let messages: DisplayMessage[] = [];
   let draft = '';
-  let apiKey = '';
+  let signedIn = false;
   let loading = true;
   let sending = false;
   let applying = false;
@@ -136,7 +136,6 @@
       const codeBefore = script.code;
       const result = await chatWithScript(
         {
-          apiKey,
           origin: request.origin,
           scriptId: request.scriptId,
           creating: request.creating,
@@ -245,9 +244,7 @@
 
   onMount(() => {
     void (async () => {
-      const stored = await browser.storage.local.get(API_KEY_STORAGE_KEY);
-      const value = stored[API_KEY_STORAGE_KEY];
-      apiKey = typeof value === 'string' ? value : '';
+      signedIn = await hasCodexSubscription();
       await readRequest();
     })();
 
@@ -255,9 +252,9 @@
       changes: Record<string, Browser.storage.StorageChange>,
       areaName: string,
     ) => {
-      if (areaName === 'local' && changes[API_KEY_STORAGE_KEY]) {
-        const nextKey = changes[API_KEY_STORAGE_KEY].newValue;
-        apiKey = typeof nextKey === 'string' ? nextKey : '';
+      if (areaName === 'local' && changes[CODEX_REFRESH_TOKEN_STORAGE_KEY]) {
+        signedIn =
+          typeof changes[CODEX_REFRESH_TOKEN_STORAGE_KEY].newValue === 'string';
       }
       if (areaName === 'session' && changes[SIDEBAR_REQUEST_STORAGE_KEY]) {
         const next = changes[SIDEBAR_REQUEST_STORAGE_KEY].newValue as
@@ -350,8 +347,8 @@
         </div>
       {/if}
       {#if applyStatus}<p class="apply-status" role="status">{applyStatus}</p>{/if}
-      {#if !apiKey.trim()}
-        <p class="key-required" role="status">Add your OpenAI API key in the Vibext popup to start chatting.</p>
+      {#if !signedIn}
+        <p class="auth-required" role="status">Sign in with ChatGPT in the Vibext popup to start chatting.</p>
       {/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
       <textarea
@@ -359,7 +356,7 @@
         placeholder="Describe the change you want…"
         bind:value={draft}
         on:keydown={handleKeydown}
-        disabled={!apiKey.trim()}
+        disabled={!signedIn}
       ></textarea>
       <div class="composer-footer">
         <span>Enter to send · Shift+Enter for newline</span>
@@ -367,7 +364,7 @@
           class="send"
           type="button"
           on:click={() => void send()}
-          disabled={sending || !draft.trim() || !apiKey.trim()}
+          disabled={sending || !draft.trim() || !signedIn}
         >{sending ? 'Working…' : 'Send'}</button>
       </div>
     </section>

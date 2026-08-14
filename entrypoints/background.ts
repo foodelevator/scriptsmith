@@ -1,6 +1,14 @@
+import {
+  CODEX_LOGIN_ALARM,
+  pollCodexLogin,
+  resumeCodexLogin,
+} from '../utils/codex-auth';
 import { syncRegisteredScripts } from '../utils/scripts';
 
 export default defineBackground(() => {
+  // Remove credentials saved by versions that used the separately billed API.
+  void browser.storage.local.remove('openaiApiKey');
+
   const sync = () => {
     void syncRegisteredScripts().catch((error) => {
       // Browsers can require the user to explicitly enable the User Scripts API.
@@ -8,6 +16,13 @@ export default defineBackground(() => {
     });
   };
 
+  browser.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === CODEX_LOGIN_ALARM) void pollCodexLogin();
+  });
   browser.runtime.onInstalled.addListener(sync);
-  browser.runtime.onStartup.addListener(sync);
+  browser.runtime.onStartup.addListener(() => {
+    sync();
+    void resumeCodexLogin();
+  });
+  void resumeCodexLogin();
 });

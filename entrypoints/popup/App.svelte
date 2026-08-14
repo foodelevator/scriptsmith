@@ -5,7 +5,17 @@
     removePageScript,
     type PageScript,
   } from '../../utils/scripts';
-  import { API_KEY_STORAGE_KEY, createDraftScript } from '../../utils/ai';
+  import { createDraftScript } from '../../utils/ai';
+  import {
+    CODEX_LOGIN_STATE_STORAGE_KEY,
+    CODEX_REFRESH_TOKEN_STORAGE_KEY,
+    cancelCodexLogin,
+    getCodexLoginState,
+    hasCodexSubscription,
+    signOutCodex,
+    startCodexLogin,
+    type CodexLoginState,
+  } from '../../utils/codex-auth';
   import { openScriptSidebar } from '../../utils/sidebar';
 
   let scripts: PageScript[] = [];
@@ -14,9 +24,9 @@
   let windowId: number | undefined;
   let loading = true;
   let working = false;
-  let apiKey = '';
-  let showApiKey = false;
-  let apiSettingsOpen = false;
+  let signedIn = false;
+  let signingIn = false;
+  let loginState: CodexLoginState | null = null;
   let status = '';
   let error = '';
 
@@ -29,13 +39,14 @@
     error = '';
 
     try {
-      const [tab, stored] = await Promise.all([
+      const [tab, nextSignedIn, nextLoginState] = await Promise.all([
         browser.tabs.query({ active: true, currentWindow: true }).then(([active]) => active),
-        browser.storage.local.get(API_KEY_STORAGE_KEY),
+        hasCodexSubscription(),
+        getCodexLoginState(),
       ]);
-      const storedApiKey = stored[API_KEY_STORAGE_KEY];
-      apiKey = typeof storedApiKey === 'string' ? storedApiKey : '';
-      apiSettingsOpen = !apiKey;
+      signedIn = nextSignedIn;
+      loginState = nextLoginState;
+      signingIn = nextLoginState?.status === 'pending';
       origin = originFromUrl(tab?.url);
       tabId = tab?.id ?? null;
       windowId = tab?.windowId;
@@ -53,13 +64,45 @@
     }
   }
 
-  async function saveApiKey(): Promise<void> {
+  async function signIn(): Promise<void> {
+    if (signingIn) return;
     error = '';
+    status = '';
+    loginState = null;
+    signingIn = true;
     try {
-      const value = apiKey.trim();
-      if (value) await browser.storage.local.set({ [API_KEY_STORAGE_KEY]: value });
-      else await browser.storage.local.remove(API_KEY_STORAGE_KEY);
-      status = value ? 'OpenAI API key saved.' : 'OpenAI API key removed.';
+      loginState = await startCodexLogin();
+    } catch (caught) {
+      signingIn = false;
+      error = messageFor(caught);
+    }
+  }
+
+  async function openSignInPage(): Promise<void> {
+    if (!loginState) return;
+    try {
+      await navigator.clipboard.writeText(loginState.userCode);
+    } catch {
+      // The code remains visible if clipboard access is unavailable.
+    }
+    await browser.tabs.create({ url: loginState.verificationUrl });
+  }
+
+  async function cancelSignIn(): Promise<void> {
+    await cancelCodexLogin();
+    signingIn = false;
+    loginState = null;
+  }
+
+  async function signOut(): Promise<void> {
+    error = '';
+    status = '';
+    try {
+      await signOutCodex();
+      signedIn = false;
+      signingIn = false;
+      loginState = null;
+      status = 'Signed out of ChatGPT.';
     } catch (caught) {
       error = messageFor(caught);
     }
@@ -116,6 +159,29 @@
 
   onMount(() => {
     void loadPage();
+    const listener = (
+      changes: Record<string, Browser.storage.StorageChange>,
+      areaName: string,
+    ) => {
+      if (areaName === 'local' && changes[CODEX_REFRESH_TOKEN_STORAGE_KEY]) {
+        signedIn = typeof changes[CODEX_REFRESH_TOKEN_STORAGE_KEY].newValue === 'string';
+      }
+      if (areaName === 'session' && changes[CODEX_LOGIN_STATE_STORAGE_KEY]) {
+        const next = changes[CODEX_LOGIN_STATE_STORAGE_KEY].newValue as
+          | CodexLoginState
+          | undefined;
+        loginState = next ?? null;
+        signingIn = next?.status === 'pending';
+        if (next?.status === 'complete') {
+          signedIn = true;
+          status = 'Signed in with ChatGPT.';
+        } else if (next?.status === 'error') {
+          error = next.error ?? 'ChatGPT sign-in failed.';
+        }
+      }
+    };
+    browser.storage.onChanged.addListener(listener);
+    return () => browser.storage.onChanged.removeListener(listener);
   });
 </script>
 
@@ -172,24 +238,53 @@
     disabled={!origin || tabId === null || working}
   >{working ? 'Opening…' : 'Add script'}</button>
 
-  <details class="settings" bind:open={apiSettingsOpen}>
-    <summary>OpenAI API key</summary>
-    <div class="key-row">
-      <input
-        type={showApiKey ? 'text' : 'password'}
-        placeholder="sk-…"
-        autocomplete="off"
-        bind:value={apiKey}
-      />
-      <button class="secondary" type="button" on:click={() => (showApiKey = !showApiKey)}>
-        {showApiKey ? 'Hide' : 'Show'}
-      </button>
-      <button class="secondary save-key" type="button" on:click={() => void saveApiKey()}>
-        Save
-      </button>
+  <section class="account" aria-labelledby="account-heading">
+    <div class="section-heading">
+      <h2 id="account-heading">Codex subscription</h2>
+      <span class:signed-in={signedIn} class="account-status">
+        {signedIn ? 'Signed in' : 'Not signed in'}
+      </span>
     </div>
-    <p>Stored locally in this browser and sent only to OpenAI.</p>
-  </details>
+    {#if signedIn}
+      <div class="account-row">
+        <p>Vibext uses your ChatGPT Codex subscription.</p>
+        <button class="secondary" type="button" on:click={() => void signOut()}>Sign out</button>
+      </div>
+    {:else if signingIn && loginState}
+      <div class="device-login">
+        <p>Enter this one-time code on the OpenAI page:</p>
+        <strong>{loginState.userCode}</strong>
+        <div class="login-actions">
+          <button
+            class="secondary sign-in"
+            type="button"
+            on:click={() => void openSignInPage()}
+          >Copy code and sign in</button>
+          <button class="secondary" type="button" on:click={() => void cancelSignIn()}>Cancel</button>
+        </div>
+      </div>
+    {:else}
+      <div class="account-row">
+        <p>Sign in with ChatGPT to use your Codex subscription.</p>
+        <button
+          class="secondary sign-in"
+          class:loading={signingIn}
+          type="button"
+          aria-busy={signingIn}
+          on:click={() => void signIn()}
+          disabled={signingIn}
+        >
+          {signingIn ? 'Starting' : 'Sign in'}
+          {#if signingIn}
+            <span class="loading-dots" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </span>
+          {/if}
+        </button>
+      </div>
+    {/if}
+    <p class="storage-note">The refresh token is stored locally in this browser.</p>
+  </section>
 
   {#if error}<p class="message error" role="alert">{error}</p>{/if}
   {#if status}<p class="message success" role="status">{status}</p>{/if}

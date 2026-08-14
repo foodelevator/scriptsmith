@@ -1,11 +1,14 @@
 import {
+  getCodexCredentials,
+  invalidateCodexAccessToken,
+} from './codex-auth';
+import {
   addPageScript,
   getPageScript,
   updatePageScript,
   type PageScript,
 } from './scripts';
 
-export const API_KEY_STORAGE_KEY = 'openaiApiKey';
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-sol';
 const OPENAI_TIMEOUT_MS = 60_000;
 
@@ -15,7 +18,6 @@ export interface ChatMessage {
 }
 
 export interface ScriptChatRequest {
-  apiKey: string;
   origin: string;
   scriptId: string;
   creating: boolean;
@@ -70,7 +72,7 @@ const tools = [
       required: ['query'],
       additionalProperties: false,
     },
-    strict: true,
+    strict: null,
   },
   {
     type: 'function',
@@ -83,7 +85,7 @@ const tools = [
       required: ['selector'],
       additionalProperties: false,
     },
-    strict: true,
+    strict: null,
   },
   {
     type: 'function',
@@ -99,7 +101,7 @@ const tools = [
       required: ['old_text', 'new_text'],
       additionalProperties: false,
     },
-    strict: true,
+    strict: null,
   },
   {
     type: 'function',
@@ -111,7 +113,7 @@ const tools = [
       required: ['name'],
       additionalProperties: false,
     },
-    strict: true,
+    strict: null,
   },
   {
     type: 'function',
@@ -123,7 +125,7 @@ const tools = [
       required: ['description'],
       additionalProperties: false,
     },
-    strict: true,
+    strict: null,
   },
 ] as const;
 
@@ -378,7 +380,10 @@ async function readResponseStream(
       }
     }
 
-    if (event.type === 'response.completed' && event.response) {
+    if (
+      (event.type === 'response.completed' || event.type === 'response.done') &&
+      event.response
+    ) {
       completed = event.response as OpenAiResponse;
     }
     if (event.type === 'response.failed') {
@@ -402,7 +407,7 @@ async function readResponseStream(
     if (done) break;
   }
   if (buffer.trim()) handleEvent(buffer);
-  if (!completed) throw new Error('OpenAI closed the response stream unexpectedly.');
+  if (!completed) throw new Error('Codex closed the response stream unexpectedly.');
   const finalResponse = completed as OpenAiResponse;
 
   for (const item of finalResponse.output ?? []) {
@@ -419,54 +424,68 @@ async function readResponseStream(
 }
 
 async function createResponse(
-  apiKey: string,
   instructions: string,
   input: ResponseInputItem[],
   callbacks: ScriptChatCallbacks,
 ): Promise<OpenAiResponse> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
-  let response: Response;
 
   try {
-    response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: DEFAULT_OPENAI_MODEL,
-        instructions,
-        input,
-        tools,
-        tool_choice: 'auto',
-        reasoning: { effort: 'low' },
-        store: false,
-        // Required when statelessly passing reasoning items back after tools.
-        include: ['reasoning.encrypted_content'],
-        stream: true,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const body = (await response.json().catch(() => null)) as OpenAiResponse | null;
-      throw new Error(
-        body?.error?.message ?? `OpenAI request failed (${response.status}).`,
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const credentials = await getCodexCredentials(attempt > 0);
+      const response = await fetch(
+        'https://chatgpt.com/backend-api/codex/responses',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${credentials.accessToken}`,
+            'chatgpt-account-id': credentials.accountId,
+            originator: 'vibext',
+            'OpenAI-Beta': 'responses=experimental',
+            Accept: 'text/event-stream',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: DEFAULT_OPENAI_MODEL,
+            instructions,
+            input,
+            tools,
+            tool_choice: 'auto',
+            parallel_tool_calls: true,
+            reasoning: { effort: 'low', summary: 'auto' },
+            text: { verbosity: 'low' },
+            store: false,
+            // Required when statelessly passing reasoning items back after tools.
+            include: ['reasoning.encrypted_content'],
+            stream: true,
+          }),
+          signal: controller.signal,
+        },
       );
-    }
 
-    return await readResponseStream(response, callbacks);
+      if (response.status === 401 && attempt === 0) {
+        invalidateCodexAccessToken();
+        continue;
+      }
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as OpenAiResponse | null;
+        throw new Error(
+          body?.error?.message ?? `Codex request failed (${response.status}).`,
+        );
+      }
+
+      return await readResponseStream(response, callbacks);
+    }
+    throw new Error('ChatGPT authentication failed. Sign in again.');
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error('OpenAI did not respond within 60 seconds. Try again.');
+      throw new Error('Codex did not respond within 60 seconds. Try again.');
     }
     throw error;
   } finally {
     clearTimeout(timeout);
   }
-
 }
 
 function isToolCall(item: ResponseOutputItem): item is ToolCall {
@@ -503,8 +522,6 @@ export async function chatWithScript(
   request: ScriptChatRequest,
   callbacks: ScriptChatCallbacks = {},
 ): Promise<ScriptChatResponse> {
-  const apiKey = request.apiKey.trim();
-  if (!apiKey) throw new Error('Add your OpenAI API key before chatting.');
   if (request.messages.length === 0) throw new Error('The conversation is empty.');
 
   let script = await getPageScript(request.origin, request.scriptId);
@@ -521,7 +538,7 @@ export async function chatWithScript(
   let instructions = systemPrompt(script, request.creating);
 
   for (let turn = 0; turn < 10; turn += 1) {
-    const answer = await createResponse(apiKey, instructions, input, callbacks);
+    const answer = await createResponse(instructions, input, callbacks);
     const output = answer.output ?? [];
     const calls = output.filter(isToolCall);
 
