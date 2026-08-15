@@ -747,7 +747,7 @@ export async function chatWithScript(
   }));
   callbacks.onTranscriptItems?.([input[input.length - 1]!]);
 
-  for (let turn = 0; turn < 10; turn += 1) {
+  for (let turn = 0; turn < 256; turn += 1) {
     let editorOrigin: string | null = null;
     try {
       const editorTab = await browser.tabs.get(request.tabId);
