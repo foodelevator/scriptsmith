@@ -1,6 +1,8 @@
+import { scriptRuntimeCode } from './script-runtime';
+
 export interface PageScript {
   id: string;
-  origin: string;
+  origins: string[];
   name: string;
   description: string;
   code: string;
@@ -9,63 +11,71 @@ export interface PageScript {
 }
 
 export type PageScriptChanges = Partial<
-  Pick<PageScript, 'name' | 'description' | 'code' | 'enabled'>
+  Pick<PageScript, 'origins' | 'name' | 'description' | 'code' | 'enabled'>
 >;
 
 const STORAGE_KEY = 'pageScripts';
 const REGISTRATION_PREFIX = 'vibext-';
 
-type StoredScripts = Record<string, PageScript[]>;
-
+type StoredScripts = Record<string, PageScript>;
 type UserScriptsApi = typeof browser.userScripts;
 
 function getUserScriptsApi(): UserScriptsApi {
   const api = browser.userScripts;
-
   if (!api) {
     throw new Error(
       'The User Scripts API is unavailable. Enable “Allow User Scripts” for Vibext in your browser’s extension settings.',
     );
   }
-
   return api;
 }
 
 function normalizePageScript(value: unknown): PageScript | null {
   if (!value || typeof value !== 'object') return null;
-  const script = value as Partial<PageScript>;
+  const legacy = value as Partial<PageScript> & { origin?: unknown };
+  const origins = Array.isArray(legacy.origins)
+    ? legacy.origins.filter((origin): origin is string => typeof origin === 'string')
+    : typeof legacy.origin === 'string'
+      ? [legacy.origin]
+      : [];
   if (
-    typeof script.id !== 'string' ||
-    typeof script.origin !== 'string' ||
-    typeof script.name !== 'string' ||
-    typeof script.description !== 'string' ||
-    typeof script.code !== 'string' ||
-    (script.enabled !== undefined && typeof script.enabled !== 'boolean') ||
-    typeof script.createdAt !== 'number'
-  ) {
-    return null;
-  }
+    typeof legacy.id !== 'string' ||
+    origins.length === 0 ||
+    typeof legacy.name !== 'string' ||
+    typeof legacy.description !== 'string' ||
+    typeof legacy.code !== 'string' ||
+    (legacy.enabled !== undefined && typeof legacy.enabled !== 'boolean') ||
+    typeof legacy.createdAt !== 'number'
+  ) return null;
 
-  // Scripts saved before per-script toggles were introduced remain enabled.
-  return { ...script, enabled: script.enabled ?? true } as PageScript;
+  return {
+    id: legacy.id,
+    origins: [...new Set(origins)],
+    name: legacy.name,
+    description: legacy.description,
+    code: legacy.code,
+    enabled: legacy.enabled ?? true,
+    createdAt: legacy.createdAt,
+  };
 }
 
-async function readAllScripts(): Promise<StoredScripts> {
+export async function readAllScripts(): Promise<StoredScripts> {
   const result = await browser.storage.local.get(STORAGE_KEY);
   const stored = result[STORAGE_KEY];
-
   if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
 
-  return Object.fromEntries(
-    Object.entries(stored as Record<string, unknown>).map(([origin, scripts]) => [
-      origin,
-      Array.isArray(scripts)
-        ? scripts
-            .map(normalizePageScript)
-            .filter((script): script is PageScript => script !== null)
-        : [],
-    ]),
-  );
+  const entries = Object.entries(stored as Record<string, unknown>);
+  const legacyShape = entries.some(([, value]) => Array.isArray(value));
+  const normalized: StoredScripts = {};
+  for (const [, value] of entries) {
+    const values = Array.isArray(value) ? value : [value];
+    for (const candidate of values) {
+      const script = normalizePageScript(candidate);
+      if (script) normalized[script.id] = script;
+    }
+  }
+  if (legacyShape) await writeAllScripts(normalized);
+  return normalized;
 }
 
 async function writeAllScripts(scripts: StoredScripts): Promise<void> {
@@ -76,20 +86,20 @@ function registrationId(scriptId: string): string {
   return `${REGISTRATION_PREFIX}${scriptId}`;
 }
 
-function matchPattern(origin: string): string {
+export function matchPattern(origin: string): string {
   const url = new URL(origin);
   return `${url.protocol}//${url.hostname}/*`;
 }
 
 function executableCode(script: PageScript): string {
-  // Match patterns cannot distinguish ports, so retain an exact origin guard.
-  return `if (location.origin === ${JSON.stringify(script.origin)}) {\n${script.code}\n}`;
+  const origins = JSON.stringify(script.origins);
+  return `if (${origins}.includes(location.origin)) {\nconst vibext = ${scriptRuntimeCode(script.id)};\n${script.code}\n}`;
 }
 
 function registrationFor(script: PageScript): Browser.userScripts.RegisteredUserScript {
   return {
     id: registrationId(script.id),
-    matches: [matchPattern(script.origin)],
+    matches: script.origins.map(matchPattern),
     js: [{ code: executableCode(script) }],
     runAt: 'document_idle',
   };
@@ -97,158 +107,119 @@ function registrationFor(script: PageScript): Browser.userScripts.RegisteredUser
 
 export function originFromUrl(url: string | undefined): string | null {
   if (!url) return null;
-
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-      ? parsed.origin
-      : null;
-  } catch {
-    return null;
-  }
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : null;
+  } catch { return null; }
+}
+
+export async function getAllPageScripts(): Promise<PageScript[]> {
+  return Object.values(await readAllScripts());
 }
 
 export async function getScriptsForOrigin(origin: string): Promise<PageScript[]> {
-  const scripts = await readAllScripts();
-  return scripts[origin] ?? [];
+  return (await getAllPageScripts()).filter((script) => script.origins.includes(origin));
 }
 
-export async function getPageScript(
-  origin: string,
-  scriptId: string,
-): Promise<PageScript | null> {
-  const scripts = await getScriptsForOrigin(origin);
-  return scripts.find((script) => script.id === scriptId) ?? null;
+export async function getPageScript(scriptId: string): Promise<PageScript | null> {
+  return (await readAllScripts())[scriptId] ?? null;
 }
 
 export async function addPageScript(
-  input: Pick<PageScript, 'origin' | 'name' | 'description' | 'code'>,
+  input: Pick<PageScript, 'origins' | 'name' | 'description' | 'code'>,
 ): Promise<PageScript> {
+  if (input.origins.length === 0) throw new Error('A script must have at least one origin.');
   const script: PageScript = {
     ...input,
-    id: crypto.randomUUID(),
-    enabled: true,
-    createdAt: Date.now(),
+    origins: [...new Set(input.origins)],
+    id: crypto.randomUUID(), enabled: true, createdAt: Date.now(),
   };
   const api = getUserScriptsApi();
-
-  // Registration also validates the JavaScript before it is persisted.
   await api.register([registrationFor(script)]);
-
   try {
     const stored = await readAllScripts();
-    stored[script.origin] = [...(stored[script.origin] ?? []), script];
+    stored[script.id] = script;
     await writeAllScripts(stored);
   } catch (error) {
     await api.unregister({ ids: [registrationId(script.id)] });
     throw error;
   }
-
   return script;
 }
 
-export async function updatePageScript(
-  script: PageScript,
-  changes: PageScriptChanges,
-): Promise<PageScript> {
+export async function updatePageScript(script: PageScript, changes: PageScriptChanges): Promise<PageScript> {
   const stored = await readAllScripts();
-  const scriptsForOrigin = stored[script.origin] ?? [];
-  const current = scriptsForOrigin.find((candidate) => candidate.id === script.id);
+  const current = stored[script.id];
   if (!current) throw new Error('The script no longer exists.');
-
-  // Merge into the stored version so a toggle made while the editor is open
-  // is not accidentally overwritten by a later code or metadata edit.
   const updated: PageScript = { ...current, ...changes };
+  updated.origins = [...new Set(updated.origins)];
+  if (updated.origins.length === 0) throw new Error('A script must have at least one origin.');
   const api = getUserScriptsApi();
+  if (current.enabled && updated.enabled) await api.update([registrationFor(updated)]);
+  else if (!current.enabled && updated.enabled) await api.register([registrationFor(updated)]);
+  else if (current.enabled && !updated.enabled) await api.unregister({ ids: [registrationId(current.id)] });
 
-  if (current.enabled && updated.enabled) {
-    // Updating the registration validates changed JavaScript before it is saved.
-    await api.update([registrationFor(updated)]);
-  } else if (!current.enabled && updated.enabled) {
-    await api.register([registrationFor(updated)]);
-  } else if (current.enabled && !updated.enabled) {
-    await api.unregister({ ids: [registrationId(current.id)] });
-  }
-
-  stored[current.origin] = scriptsForOrigin.map((candidate) =>
-    candidate.id === current.id ? updated : candidate,
-  );
-  try {
-    await writeAllScripts(stored);
-  } catch (error) {
-    if (current.enabled && updated.enabled) {
-      await api.update([registrationFor(current)]);
-    } else if (!current.enabled && updated.enabled) {
-      await api.unregister({ ids: [registrationId(current.id)] });
-    } else if (current.enabled && !updated.enabled) {
-      await api.register([registrationFor(current)]);
-    }
+  stored[current.id] = updated;
+  try { await writeAllScripts(stored); }
+  catch (error) {
+    if (current.enabled && updated.enabled) await api.update([registrationFor(current)]);
+    else if (!current.enabled && updated.enabled) await api.unregister({ ids: [registrationId(current.id)] });
+    else if (current.enabled && !updated.enabled) await api.register([registrationFor(current)]);
     throw error;
   }
-
   return updated;
 }
 
-export async function setPageScriptEnabled(
-  script: PageScript,
-  enabled: boolean,
-): Promise<PageScript> {
+export function addOriginToScript(script: PageScript, origin: string): Promise<PageScript> {
+  return updatePageScript(script, { origins: [...new Set([...script.origins, origin])] });
+}
+
+export function removeOriginFromScript(script: PageScript, origin: string): Promise<PageScript> {
+  if (!script.origins.includes(origin)) throw new Error('That origin is not part of the script.');
+  if (script.origins.length === 1) throw new Error('A script must keep at least one origin.');
+  return updatePageScript(script, { origins: script.origins.filter((item) => item !== origin) });
+}
+
+export function setPageScriptEnabled(script: PageScript, enabled: boolean): Promise<PageScript> {
   return updatePageScript(script, { enabled });
 }
 
-export async function runPageScriptNow(
-  script: PageScript,
-  tabId: number,
-): Promise<string | null> {
-  const current = await getPageScript(script.origin, script.id);
+export async function runPageScriptNow(script: PageScript, tabId: number): Promise<string | null> {
+  const current = await getPageScript(script.id);
   if (!current) throw new Error('The script no longer exists.');
   if (!current.enabled) throw new Error('Enable this script before running it.');
-
   const api = getUserScriptsApi();
-
-  // execute() is newer than register(); older browsers will run it on reload.
   if (typeof api.execute !== 'function') return null;
-
-  const results = await api.execute({
-    js: [{ code: executableCode(current) }],
-    target: { tabId },
-  });
-  const failed = results.find((result) => 'error' in result && result.error);
-  if (failed && 'error' in failed) throw new Error(failed.error);
-  return 'ran';
+  const tabs = await browser.tabs.query({ url: current.origins.map(matchPattern) });
+  const tabIds = new Set(tabs.flatMap((tab) => tab.id === undefined ? [] : [tab.id]));
+  tabIds.add(tabId);
+  let count = 0;
+  for (const targetTabId of tabIds) {
+    const results = await api.execute({ js: [{ code: executableCode(current) }], target: { tabId: targetTabId } });
+    const failed = results.find((result) => 'error' in result && result.error);
+    if (failed && 'error' in failed) throw new Error(failed.error);
+    count += 1;
+  }
+  return `ran:${count}`;
 }
 
 export async function removePageScript(script: PageScript): Promise<void> {
   const api = getUserScriptsApi();
-  if (script.enabled) {
-    await api.unregister({ ids: [registrationId(script.id)] });
-  }
-
+  if (script.enabled) await api.unregister({ ids: [registrationId(script.id)] });
   const stored = await readAllScripts();
-  const remaining = (stored[script.origin] ?? []).filter(
-    (candidate) => candidate.id !== script.id,
-  );
-
-  if (remaining.length > 0) stored[script.origin] = remaining;
-  else delete stored[script.origin];
-
+  delete stored[script.id];
   await writeAllScripts(stored);
 }
 
 export async function syncRegisteredScripts(): Promise<void> {
   const api = getUserScriptsApi();
-  const stored = await readAllScripts();
-  const expected = Object.values(stored).flat().filter((script) => script.enabled);
+  const expected = (await getAllPageScripts()).filter((script) => script.enabled);
   const expectedIds = new Set(expected.map((script) => registrationId(script.id)));
   const registered = await api.getScripts();
   const registeredIds = new Set(registered.map((script) => script.id));
-  const staleIds = registered
-    .map((script) => script.id)
+  const staleIds = registered.map((script) => script.id)
     .filter((id) => id.startsWith(REGISTRATION_PREFIX) && !expectedIds.has(id));
-  const missing = expected.filter(
-    (script) => !registeredIds.has(registrationId(script.id)),
-  );
-
+  const missing = expected.filter((script) => !registeredIds.has(registrationId(script.id)));
   if (staleIds.length > 0) await api.unregister({ ids: staleIds });
   if (missing.length > 0) await api.register(missing.map(registrationFor));
 }

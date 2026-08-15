@@ -17,6 +17,7 @@ export default defineConfig({
       'clipboardWrite',
       'scripting',
       'storage',
+      'tabs',
       'userScripts',
     ],
     host_permissions: [

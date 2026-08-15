@@ -38,6 +38,28 @@ header p {
   line-height: 1.4;
 }
 
+.origin-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.origin-chips > span { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--border); border-radius: 999px; padding: 2px 3px 2px 7px; font-size: 11px; color: var(--text-muted); }
+.origin-chips > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.origin-chips button { display: grid; place-items: center; flex: none; width: 18px; height: 18px; margin-left: 3px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; line-height: 1; }
+.origin-chips button:not(:disabled):hover { background: var(--surface-2); color: var(--text); }
+.origin-chips button:disabled { opacity: 0.4; }
+
+.add-site { margin-top: 8px; }
+.add-site label { display: block; margin-bottom: 5px; font-size: 12px; font-weight: 600; }
+.add-site-row { display: flex; gap: 6px; align-items: flex-start; }
+.site-combobox { position: relative; min-width: 0; flex: 1; }
+.site-origin-input { box-sizing: border-box; width: 100%; padding-right: 34px; }
+.suggestion-toggle { position: absolute; top: 1px; right: 1px; display: grid; place-items: center; width: 30px; height: calc(100% - 2px); padding: 0; border: 0; background: transparent; color: var(--text-muted); }
+.suggestion-toggle svg { width: 16px; fill: none; stroke: currentColor; stroke-width: 2; }
+.site-suggestions { z-index: 100; width: var(--bits-combobox-anchor-width); padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 24px rgb(0 0 0 / 18%); }
+.site-suggestions-viewport { max-height: 192px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.site-suggestion { display: block; width: 100%; padding: 7px 8px; border-radius: 5px; color: inherit; cursor: pointer; font-size: 13px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-suggestion[data-highlighted] { background: var(--surface-2); }
+.site-suggestions p { margin: 6px; color: var(--text-muted); font-size: 12px; }
+.add-site-button { flex: none; }
+.add-site small { display: block; margin-top: 4px; color: var(--text-muted); }
+
 .script-source {
   width: 100%;
   min-width: 0;

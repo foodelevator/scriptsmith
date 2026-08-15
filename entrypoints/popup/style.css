@@ -117,6 +117,8 @@ header p {
   line-height: 1.4;
 }
 
+.multi-page { font-size: 11px; color: var(--text-muted); }
+
 .script-actions {
   display: flex;
   align-items: center;

@@ -170,7 +170,7 @@
 
     try {
       await openScriptSidebar(
-        { scriptId: script.id, origin: script.origin },
+        { scriptId: script.id },
         tabId,
         windowId,
       );
@@ -309,6 +309,9 @@
             <div class="script-details">
               <strong>{script.name}</strong>
               <p>{script.description}</p>
+              {#if script.origins.length > 1}
+                <span class="multi-page" title={script.origins.join('\n')}>+{script.origins.length - 1} sites</span>
+              {/if}
             </div>
             <div class="script-actions">
               <label class="script-toggle" title={`${script.enabled ? 'Disable' : 'Enable'} ${script.name}`}>

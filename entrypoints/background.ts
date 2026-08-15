@@ -4,16 +4,21 @@ import {
   resumeCodexLogin,
 } from '../utils/codex-auth';
 import { syncRegisteredScripts } from '../utils/scripts';
+import { startScriptCoordinator } from '../utils/coordinator';
 import {
   clearScriptSidebarRequest,
   disableGlobalScriptSidebar,
 } from '../utils/sidebar';
 
 export default defineBackground(() => {
+  startScriptCoordinator();
   // Remove credentials saved by versions that used the separately billed API.
   void browser.storage.local.remove('openaiApiKey');
 
   const sync = () => {
+    void browser.userScripts?.configureWorld?.({ messaging: true }).catch((error) => {
+      console.warn('Vibext could not enable user-script messaging:', error);
+    });
     void syncRegisteredScripts().catch((error) => {
       // Browsers can require the user to explicitly enable the User Scripts API.
       console.warn('Vibext could not synchronize page scripts:', error);
