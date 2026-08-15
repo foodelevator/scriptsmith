@@ -375,6 +375,16 @@
           onToolResult(callId) {
             finishActivity(callId);
           },
+          onScriptChange(updatedScript) {
+            script = updatedScript;
+            openOrigins = openOrigins.filter(
+              (origin) => !updatedScript.origins.includes(origin),
+            );
+            if (updatedScript.code !== codeBefore) {
+              scriptChanged = true;
+              applyStatus = '';
+            }
+          },
           onTranscriptItems(items) {
             transcript = [...transcript, ...items];
           },

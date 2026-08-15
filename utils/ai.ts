@@ -51,6 +51,7 @@ export interface ScriptChatCallbacks {
   onToolCallDone?(callId: string): void;
   onToolExecutionStart?(callId: string): void;
   onToolResult?(callId: string): void;
+  onScriptChange?(script: PageScript): void;
   onTranscriptItems?(items: ChatTranscriptItem[]): void;
 }
 
@@ -792,6 +793,7 @@ export async function chatWithScript(
       try {
         const used = await useTool(script, call, request.tabId);
         script = used.script;
+        callbacks.onScriptChange?.(script);
         result = used.output;
       } catch (error) {
         result = {
