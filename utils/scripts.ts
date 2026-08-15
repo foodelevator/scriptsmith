@@ -101,6 +101,7 @@ function registrationFor(script: PageScript): Browser.userScripts.RegisteredUser
     id: registrationId(script.id),
     matches: script.origins.map(matchPattern),
     js: [{ code: executableCode(script) }],
+    allFrames: true,
     runAt: 'document_idle',
   };
 }
@@ -195,7 +196,10 @@ export async function runPageScriptNow(script: PageScript, tabId: number): Promi
   tabIds.add(tabId);
   let count = 0;
   for (const targetTabId of tabIds) {
-    const results = await api.execute({ js: [{ code: executableCode(current) }], target: { tabId: targetTabId } });
+    const results = await api.execute({
+      js: [{ code: executableCode(current) }],
+      target: { tabId: targetTabId, allFrames: true },
+    });
     const failed = results.find((result) => 'error' in result && result.error);
     if (failed && 'error' in failed) throw new Error(failed.error);
     count += 1;
@@ -220,6 +224,8 @@ export async function syncRegisteredScripts(): Promise<void> {
   const staleIds = registered.map((script) => script.id)
     .filter((id) => id.startsWith(REGISTRATION_PREFIX) && !expectedIds.has(id));
   const missing = expected.filter((script) => !registeredIds.has(registrationId(script.id)));
+  const existing = expected.filter((script) => registeredIds.has(registrationId(script.id)));
   if (staleIds.length > 0) await api.unregister({ ids: staleIds });
+  if (existing.length > 0) await api.update(existing.map(registrationFor));
   if (missing.length > 0) await api.register(missing.map(registrationFor));
 }

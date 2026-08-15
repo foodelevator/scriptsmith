@@ -19,10 +19,13 @@ export default defineConfig({
       'storage',
       'tabs',
       'userScripts',
+      'webNavigation',
     ],
     host_permissions: [
-      'https://auth.openai.com/*',
-      'https://chatgpt.com/*',
+      'http://*/*',
+      'https://*/*',
+      // 'https://auth.openai.com/*',
+      // 'https://chatgpt.com/*',
     ],
   },
 });
