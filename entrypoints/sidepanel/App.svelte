@@ -3,6 +3,7 @@
   import {
     chatWithScript,
     ScriptChatAbortedError,
+    type ChatTranscriptItem,
     type ChatMessage,
     type SelectedElementReference,
   } from '../../utils/ai';
@@ -52,6 +53,7 @@
   let request: SidebarScriptRequest | null = null;
   let script: PageScript | null = null;
   let messages: DisplayMessage[] = [];
+  let transcript: ChatTranscriptItem[] = [];
   let draft = '';
   let signedIn = false;
   let loading = true;
@@ -173,6 +175,7 @@
         selectingElement = false;
         selectedElement = null;
         messages = [];
+        transcript = [];
         scriptChanged = false;
         applyStatus = '';
       }
@@ -372,6 +375,9 @@
           onToolResult(callId) {
             finishActivity(callId);
           },
+          onTranscriptItems(items) {
+            transcript = [...transcript, ...items];
+          },
           onTextDelta(delta) {
             receivedText = true;
             if (assistantIndex === null) {
@@ -462,6 +468,25 @@
     }
   }
 
+  async function copyDebugTranscript(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({ input: transcript }, null, 2));
+      applyStatus = 'Chat transcript copied as JSON.';
+    } catch (caught) {
+      error = `Could not copy chat transcript: ${messageFor(caught)}`;
+    }
+  }
+
+  function handleDebugShortcut(event: KeyboardEvent): void {
+    if (
+      event.altKey &&
+      event.key.toLowerCase() === 'c'
+    ) {
+      event.preventDefault();
+      if (!event.repeat) void copyDebugTranscript();
+    }
+  }
+
   $: if (messagesElement && messages.length) {
     tick().then(() => {
       messagesElement.scrollTo({ top: messagesElement.scrollHeight });
@@ -491,8 +516,10 @@
       }
     };
     browser.storage.onChanged.addListener(listener);
+    window.addEventListener('keydown', handleDebugShortcut);
     return () => {
       browser.storage.onChanged.removeListener(listener);
+      window.removeEventListener('keydown', handleDebugShortcut);
       chatController?.abort();
       if (selectingElement && request) cancelElementSelection(request.tabId);
     };

@@ -51,7 +51,10 @@ export interface ScriptChatCallbacks {
   onToolCallDone?(callId: string): void;
   onToolExecutionStart?(callId: string): void;
   onToolResult?(callId: string): void;
+  onTranscriptItems?(items: ChatTranscriptItem[]): void;
 }
+
+export type ChatTranscriptItem = Record<string, unknown>;
 
 export class ScriptChatAbortedError extends Error {
   constructor() {
@@ -748,6 +751,7 @@ export async function chatWithScript(
     role: message.role,
     content: modelContent(message),
   }));
+  callbacks.onTranscriptItems?.([input[input.length - 1]!]);
 
   for (let turn = 0; turn < 10; turn += 1) {
     let editorOrigin: string | null = null;
@@ -775,6 +779,7 @@ export async function chatWithScript(
     // Preserve every output item, especially encrypted reasoning items. The
     // Responses API requires these to accompany subsequent tool outputs.
     input.push(...output);
+    callbacks.onTranscriptItems?.(output);
 
     if (calls.length === 0) {
       const message = outputText(answer) || 'Done.';
@@ -802,13 +807,16 @@ export async function chatWithScript(
         };
       }
 
-      callbacks.onToolResult?.(activityKey);
-      throwIfAborted();
-      input.push({
+      const output = JSON.stringify(result);
+      const toolOutput = {
         type: 'function_call_output',
         call_id: call.call_id,
-        output: JSON.stringify(result),
-      });
+        output,
+      };
+      callbacks.onTranscriptItems?.([toolOutput]);
+      callbacks.onToolResult?.(activityKey);
+      throwIfAborted();
+      input.push(toolOutput);
     }
   }
 
