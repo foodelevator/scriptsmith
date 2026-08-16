@@ -185,15 +185,28 @@ export function setPageScriptEnabled(script: PageScript, enabled: boolean): Prom
   return updatePageScript(script, { enabled });
 }
 
-export async function runPageScriptNow(script: PageScript, tabId: number): Promise<string | null> {
+export async function matchingTabsInWindow(
+  script: PageScript,
+  windowId: number,
+): Promise<Browser.tabs.Tab[]> {
+  const tabs = await browser.tabs.query({ windowId });
+  return tabs.filter((tab) => {
+    const origin = originFromUrl(tab.url);
+    return origin !== null && script.origins.includes(origin);
+  });
+}
+
+export async function runPageScriptNow(
+  script: PageScript,
+  windowId: number,
+): Promise<number | null> {
   const current = await getPageScript(script.id);
   if (!current) throw new Error('The script no longer exists.');
   if (!current.enabled) throw new Error('Enable this script before running it.');
   const api = getUserScriptsApi();
   if (typeof api.execute !== 'function') return null;
-  const tabs = await browser.tabs.query({ url: current.origins.map(matchPattern) });
-  const tabIds = new Set(tabs.flatMap((tab) => tab.id === undefined ? [] : [tab.id]));
-  tabIds.add(tabId);
+  const tabs = await matchingTabsInWindow(current, windowId);
+  const tabIds = tabs.flatMap((tab) => tab.id === undefined ? [] : [tab.id]);
   let count = 0;
   for (const targetTabId of tabIds) {
     const results = await api.execute({
@@ -204,7 +217,7 @@ export async function runPageScriptNow(script: PageScript, tabId: number): Promi
     if (failed && 'error' in failed) throw new Error(failed.error);
     count += 1;
   }
-  return `ran:${count}`;
+  return count;
 }
 
 export async function removePageScript(script: PageScript): Promise<void> {

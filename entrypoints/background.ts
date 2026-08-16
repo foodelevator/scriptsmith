@@ -5,13 +5,11 @@ import {
 } from '../utils/codex-auth';
 import { syncRegisteredScripts } from '../utils/scripts';
 import { startScriptCoordinator } from '../utils/coordinator';
-import {
-  clearScriptSidebarRequest,
-  disableGlobalScriptSidebar,
-} from '../utils/sidebar';
+import { startSidebarCoordinator } from '../utils/sidebar-coordinator';
 
 export default defineBackground(() => {
   startScriptCoordinator();
+  startSidebarCoordinator();
   // Remove credentials saved by versions that used the separately billed API.
   void browser.storage.local.remove('openaiApiKey');
 
@@ -28,14 +26,10 @@ export default defineBackground(() => {
   browser.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === CODEX_LOGIN_ALARM) void pollCodexLogin();
   });
-  browser.tabs.onRemoved.addListener((tabId) => {
-    void clearScriptSidebarRequest(tabId);
-  });
   browser.runtime.onInstalled.addListener(sync);
   browser.runtime.onStartup.addListener(() => {
     sync();
     void resumeCodexLogin();
   });
-  void disableGlobalScriptSidebar();
   void resumeCodexLogin();
 });

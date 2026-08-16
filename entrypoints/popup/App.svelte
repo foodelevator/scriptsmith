@@ -282,7 +282,11 @@
       }
     };
     browser.storage.onChanged.addListener(listener);
-    return () => browser.storage.onChanged.removeListener(listener);
+    return () => {
+      browser.storage.onChanged.removeListener(listener);
+      void browser.runtime.sendMessage({ type: 'vibext:sidebar:reconcile' })
+        .catch(() => undefined);
+    };
   });
 </script>
 

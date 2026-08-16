@@ -1,13 +1,10 @@
 <script lang="ts">
   import { Combobox, Popover, Slider } from 'bits-ui';
   import {
-    chatWithScript,
     DEFAULT_CHAT_SETTINGS,
-    ScriptChatAbortedError,
     type ChatSettings,
     type ContextUsage,
     type ChatTranscriptItem,
-    type ChatMessage,
     type OpenAIModel,
     type ReasoningEffort,
     type SelectedElementReference,
@@ -20,25 +17,21 @@
     addOriginToScript,
     getPageScript,
     originFromUrl,
+    matchingTabsInWindow,
     removeOriginFromScript,
     runPageScriptNow,
     type PageScript,
   } from '../../utils/scripts';
   import {
     SIDEBAR_REQUEST_STORAGE_KEY,
+    getSidebarSession,
     sidebarRequestStorageKey,
+    sidebarSessionStorageKey,
+    sidebarWindowRequestStorageKey,
+    type SidebarChatState,
+    type SidebarDisplayMessage,
     type SidebarScriptRequest,
   } from '../../utils/sidebar';
-
-  type Activity = {
-    id: string;
-    kind: 'thinking' | 'tool';
-    toolName?: string;
-    pending: boolean;
-  };
-  type DisplayMessage =
-    | ChatMessage
-    | { role: 'activity'; activities: Activity[] };
   type ElementSelectionResponse = {
     ok: boolean;
     origin?: string;
@@ -70,13 +63,13 @@
   const panelTabId = tabIdParameter && /^\d+$/.test(tabIdParameter)
     ? Number(tabIdParameter)
     : null;
-  const requestStorageKey = panelTabId === null
+  let requestStorageKey = panelTabId === null
     ? SIDEBAR_REQUEST_STORAGE_KEY
     : sidebarRequestStorageKey(panelTabId);
 
   let request: SidebarScriptRequest | null = null;
   let script: PageScript | null = null;
-  let messages: DisplayMessage[] = [];
+  let messages: SidebarDisplayMessage[] = [];
   let transcript: ChatTranscriptItem[] = [];
   let contextUsage: ContextUsage | null = null;
   let draft = '';
@@ -84,7 +77,6 @@
   let loading = true;
   let sending = false;
   let stopping = false;
-  let chatController: AbortController | null = null;
   let applying = false;
   let scriptChanged = false;
   let applyStatus = '';
@@ -100,6 +92,7 @@
   let chatSettings: ChatSettings = { ...DEFAULT_CHAT_SETTINGS };
   let settingsOpen = false;
   let settingsWrite: Promise<void> = Promise.resolve();
+  let selectionTabIds: number[] = [];
 
   $: selectedModel = modelOptions.find(
     (option) => option.value === chatSettings.model,
@@ -114,6 +107,28 @@
 
   function messageFor(caught: unknown): string {
     return caught instanceof Error ? caught.message : String(caught);
+  }
+
+  function applyChatState(state: SidebarChatState): void {
+    messages = state.messages;
+    transcript = state.transcript;
+    contextUsage = state.contextUsage;
+    draft = state.draft;
+    sending = state.sending;
+    stopping = state.stopping;
+    scriptChanged = state.scriptChanged;
+    applyStatus = state.applyStatus;
+    error = state.error;
+    selectedElement = state.selectedElement;
+  }
+
+  async function patchChat(patch: Partial<SidebarChatState>): Promise<void> {
+    if (!request) return;
+    await browser.runtime.sendMessage({
+      type: 'vibext:sidebar:patch-chat',
+      sessionId: request.sessionId,
+      patch,
+    });
   }
 
   function contextUsageColor(usedPercent: number): string {
@@ -201,50 +216,82 @@
       .catch(() => undefined);
   }
 
+  function cancelElementSelections(): void {
+    for (const tabId of selectionTabIds) cancelElementSelection(tabId);
+    selectionTabIds = [];
+  }
+
   async function toggleElementSelection(): Promise<void> {
-    if (!request) return;
-    const selectionTabId = request.tabId;
+    if (!request || !script || !request.inScope) return;
 
     if (selectingElement) {
       selectionRequestId += 1;
       selectingElement = false;
-      cancelElementSelection(selectionTabId);
+      cancelElementSelections();
       return;
     }
 
     const currentRequestId = ++selectionRequestId;
     selectingElement = true;
     error = '';
+    await patchChat({ error: '' });
     try {
-      const response = await sendPageMessage(
-        selectionTabId,
-        { type: 'vibext:start-element-selection' },
-        true,
-      );
+      const tabs = await browser.tabs.query({ windowId: request.windowId });
+      const active = tabs.find((tab) => tab.active && tab.id !== undefined);
+      if (!active || active.id === undefined) throw new Error('No active page is available.');
+      const activeSplitViewId = (active as Browser.tabs.Tab & { splitViewId?: number }).splitViewId;
+      const visible = tabs.filter((tab) => {
+        if (tab.id === undefined) return false;
+        if (tab.id === active.id) return true;
+        const splitViewId = (tab as Browser.tabs.Tab & { splitViewId?: number }).splitViewId;
+        return activeSplitViewId !== undefined && activeSplitViewId >= 0 &&
+          splitViewId === activeSplitViewId;
+      });
+      const eligible = visible.filter((tab) => {
+        const origin = originFromUrl(tab.url);
+        return origin !== null && script?.origins.includes(origin);
+      });
+      if (eligible.length === 0) {
+        throw new Error('The visible page is not one of this script\'s sites. Add the site first.');
+      }
+      selectionTabIds = eligible.flatMap((tab) => tab.id === undefined ? [] : [tab.id]);
+      const response = await Promise.any(selectionTabIds.map(async (tabId) => ({
+        tabId,
+        response: await sendPageMessage(
+          tabId,
+          { type: 'vibext:start-element-selection' },
+          true,
+        ),
+      })));
       if (currentRequestId !== selectionRequestId) return;
-      if (!response.origin || !script?.origins.includes(response.origin)) {
+      cancelElementSelections();
+      if (!response.response.origin || !script?.origins.includes(response.response.origin)) {
         throw new Error(
-          `This tab is on ${response.origin ?? 'an unknown page'}, which is not one of this script's sites. Add the site first.`,
+          `This tab is on ${response.response.origin ?? 'an unknown page'}, which is not one of this script's sites. Add the site first.`,
         );
       }
-      if (response.ok && response.element) {
+      if (response.response.ok && response.response.element) {
         selectedElement = {
-          ...response.element,
-          tabId: selectionTabId,
-          origin: response.origin,
+          ...response.response.element,
+          tabId: response.tabId,
+          origin: response.response.origin,
         };
-      } else if (!response.cancelled) {
-        throw new Error(response.error || 'Could not select an element.');
+        await patchChat({ selectedElement });
+      } else if (!response.response.cancelled) {
+        throw new Error(response.response.error || 'Could not select an element.');
       }
     } catch (caught) {
-      if (currentRequestId === selectionRequestId) error = messageFor(caught);
+      cancelElementSelections();
+      if (currentRequestId === selectionRequestId) {
+        error = messageFor(caught);
+        await patchChat({ error });
+      }
     } finally {
       if (currentRequestId === selectionRequestId) selectingElement = false;
     }
   }
 
   async function readRequest(): Promise<void> {
-    chatController?.abort();
     loading = true;
     error = '';
 
@@ -254,7 +301,7 @@
         | SidebarScriptRequest
         | undefined;
       if (!next) {
-        if (selectingElement && request) cancelElementSelection(request.tabId);
+        cancelElementSelections();
         selectionRequestId += 1;
         selectingElement = false;
         selectedElement = null;
@@ -264,23 +311,19 @@
         return;
       }
 
-      if (request?.nonce !== next.nonce) {
-        if (selectingElement && request) cancelElementSelection(request.tabId);
+      if (request?.sessionId !== next.sessionId) {
+        cancelElementSelections();
         selectionRequestId += 1;
         selectingElement = false;
-        selectedElement = null;
-        messages = [];
-        transcript = [];
-        contextUsage = null;
-        scriptChanged = false;
-        applyStatus = '';
       }
       request = next;
-      const [nextScript, tabs] = await Promise.all([
+      const [nextScript, session, tabs] = await Promise.all([
         getPageScript(next.scriptId),
-        browser.tabs.query({}),
+        getSidebarSession(next.sessionId),
+        browser.tabs.query({ windowId: next.windowId }),
       ]);
       script = nextScript;
+      if (session) applyChatState(session.chat);
       const origins = tabs.flatMap((tab) => {
         const origin = originFromUrl(tab.url);
         return origin ? [origin] : [];
@@ -289,15 +332,19 @@
         (origin) => !nextScript?.origins.includes(origin),
       ).sort();
       if (!script) error = 'This script no longer exists.';
+      if (!session) error = 'This editing session is no longer available.';
     } catch (caught) {
       error = messageFor(caught);
+      await patchChat({ error });
     } finally {
       loading = false;
     }
   }
 
   async function refreshOpenOrigins(): Promise<void> {
-    const tabs = await browser.tabs.query({});
+    const tabs = await browser.tabs.query(
+      request ? { windowId: request.windowId } : {},
+    );
     const origins = tabs.flatMap((tab) => {
       const origin = originFromUrl(tab.url);
       return origin ? [origin] : [];
@@ -329,8 +376,10 @@
       openOrigins = openOrigins.filter((candidate) => candidate !== origin);
       siteOrigin = '';
       applyStatus = `Added ${origin}. Reload that site if it is already open.`;
+      await patchChat({ applyStatus, error: '' });
     } catch (caught) {
       error = messageFor(caught);
+      await patchChat({ error });
     } finally {
       addingSite = false;
     }
@@ -344,8 +393,10 @@
       script = await removeOriginFromScript(script, origin);
       await refreshOpenOrigins();
       applyStatus = `Removed ${origin} from this script.`;
+      await patchChat({ applyStatus, error: '' });
     } catch (caught) {
       error = messageFor(caught);
+      await patchChat({ error });
     } finally {
       removingOrigin = null;
     }
@@ -354,188 +405,26 @@
   async function send(): Promise<void> {
     const content = draft.trim();
     if (!content || !request || !script || sending || selectingElement) return;
-
-    sending = true;
-    stopping = false;
-    const controller = new AbortController();
-    chatController = controller;
-    error = '';
-    const userMessage: ChatMessage = {
-      role: 'user',
-      content,
-      ...(selectedElement ? { selectedElement } : {}),
-    };
-    const conversation: ChatMessage[] = [
-      ...messages.filter(
-        (message): message is ChatMessage => message.role !== 'activity',
-      ),
-      userMessage,
-    ];
-    messages = [...messages, userMessage];
-    selectedElement = null;
-    draft = '';
     settingsOpen = false;
-    let assistantIndex: number | null = null;
-    let receivedText = false;
-    let scriptEditedDuringTurn = false;
-
-    function addActivity(activity: Activity): void {
-      const last = messages[messages.length - 1];
-      if (last?.role === 'activity') {
-        const lastActivity = last.activities[last.activities.length - 1];
-        if (activity.kind === 'thinking' && lastActivity?.kind === 'thinking') {
-          messages = [
-            ...messages.slice(0, -1),
-            {
-              role: 'activity',
-              activities: [
-                ...last.activities.slice(0, -1),
-                activity,
-              ],
-            },
-          ];
-          return;
-        }
-
-        messages = [
-          ...messages.slice(0, -1),
-          { role: 'activity', activities: [...last.activities, activity] },
-        ];
-        return;
-      }
-
-      messages = [...messages, { role: 'activity', activities: [activity] }];
-    }
-
-    function setActivityPending(id: string, pending: boolean): void {
-      messages = messages.map((message) =>
-        message.role === 'activity'
-          ? {
-              ...message,
-              activities: message.activities.map((activity) =>
-                activity.id === id ? { ...activity, pending } : activity,
-              ),
-            }
-          : message,
-      );
-    }
-
-    function finishActivity(id: string): void {
-      setActivityPending(id, false);
-    }
-
-    function finishAllActivities(): void {
-      messages = messages.map((message) =>
-        message.role === 'activity'
-          ? {
-              ...message,
-              activities: message.activities.map((activity) => ({
-                ...activity,
-                pending: false,
-              })),
-            }
-          : message,
-      );
-    }
-
     try {
-      const codeBefore = script.code;
-      const result = await chatWithScript(
-        {
-          scriptId: request.scriptId,
-          tabId: request.tabId,
-          messages: conversation,
-          settings: { ...chatSettings },
-          // Unlike the rendered message list, this includes reasoning, tool
-          // calls, and tool outputs from turns stopped by the user.
-          history: transcript,
-        },
-        {
-          onResponseStart() {
-            finishAllActivities();
-          },
-          onThinkingStart(itemId) {
-            addActivity({ id: itemId, kind: 'thinking', pending: true });
-          },
-          onThinkingDone(itemId) {
-            finishActivity(itemId);
-          },
-          onToolCall(callId, name) {
-            addActivity({
-              id: callId,
-              kind: 'tool',
-              toolName: name,
-              pending: true,
-            });
-          },
-          onToolCallDone(callId) {
-            finishActivity(callId);
-          },
-          onToolExecutionStart(callId) {
-            setActivityPending(callId, true);
-          },
-          onToolResult(callId) {
-            finishActivity(callId);
-          },
-          onScriptChange(updatedScript) {
-            script = updatedScript;
-            openOrigins = openOrigins.filter(
-              (origin) => !updatedScript.origins.includes(origin),
-            );
-            if (updatedScript.code !== codeBefore) {
-              scriptEditedDuringTurn = true;
-              applyStatus = '';
-            }
-          },
-          onTranscriptItems(items) {
-            transcript = [...transcript, ...items];
-          },
-          onContextUsage(usage) {
-            contextUsage = usage;
-          },
-          onTextDelta(delta) {
-            receivedText = true;
-            if (assistantIndex === null) {
-              assistantIndex = messages.length;
-              messages = [...messages, { role: 'assistant', content: delta }];
-              return;
-            }
-
-            messages = messages.map((message, index) =>
-              index === assistantIndex && message.role === 'assistant'
-                ? { ...message, content: `${message.content}${delta}` }
-                : message,
-            );
-          },
-        },
-        controller.signal,
-      );
-      script = result.script;
-      if (result.script.code !== codeBefore) {
-        scriptEditedDuringTurn = true;
-        applyStatus = '';
-      }
-      if (!receivedText) {
-        messages = [...messages, { role: 'assistant', content: result.message }];
-      }
+      await patchChat({ draft: content, error: '' });
+      await browser.runtime.sendMessage({
+        type: 'vibext:sidebar:start-chat',
+        sessionId: request.sessionId,
+        settings: { ...chatSettings },
+      });
     } catch (caught) {
-      if (!(caught instanceof ScriptChatAbortedError)) error = messageFor(caught);
-    } finally {
-      // Individual tools are settled by onToolResult as soon as each one
-      // finishes. This is a safety net for aborted/malformed streams: once the
-      // turn has ended, nothing from it should remain visually “running”.
-      finishAllActivities();
-      if (scriptEditedDuringTurn) scriptChanged = true;
-      if (chatController === controller) chatController = null;
-      sending = false;
-      stopping = false;
+      error = messageFor(caught);
+      await patchChat({ error });
     }
   }
 
-  function stopSending(): void {
-    if (!sending || stopping) return;
-    stopping = true;
-    chatController?.abort();
+  async function stopSending(): Promise<void> {
+    if (!request || !sending || stopping) return;
+    await browser.runtime.sendMessage({
+      type: 'vibext:sidebar:stop-chat',
+      sessionId: request.sessionId,
+    });
   }
 
   async function runNow(): Promise<void> {
@@ -545,33 +434,41 @@
     applyStatus = '';
 
     try {
-      const result = await runPageScriptNow(script, request.tabId);
-      if (result) {
+      const result = await runPageScriptNow(script, request.windowId);
+      if (result !== null) {
         scriptChanged = false;
-        const count = Number(result.split(':')[1] ?? 1);
+        const count = result;
         applyStatus = `Current script run on ${count} ${count === 1 ? 'page' : 'pages'}.`;
+        await patchChat({ scriptChanged: false, applyStatus, error: '' });
       } else {
         error = 'This browser cannot run the script immediately. Reload the page instead.';
+        await patchChat({ error });
       }
     } catch (caught) {
       error = messageFor(caught);
+      await patchChat({ error });
     } finally {
       applying = false;
     }
   }
 
-  async function reloadPage(): Promise<void> {
-    if (!request || applying) return;
+  async function reloadPages(): Promise<void> {
+    if (!request || !script || applying) return;
     applying = true;
     error = '';
     applyStatus = '';
 
     try {
-      await browser.tabs.reload(request.tabId);
+      const tabs = await matchingTabsInWindow(script, request.windowId);
+      const tabIds = tabs.flatMap((tab) => tab.id === undefined ? [] : [tab.id]);
+      await Promise.all(tabIds.map((tabId) => browser.tabs.reload(tabId)));
       scriptChanged = false;
-      applyStatus = 'Page reloaded with the current script.';
+      const count = tabIds.length;
+      applyStatus = `${count} matching ${count === 1 ? 'page' : 'pages'} reloaded with the current script.`;
+      await patchChat({ scriptChanged: false, applyStatus, error: '' });
     } catch (caught) {
       error = messageFor(caught);
+      await patchChat({ error });
     } finally {
       applying = false;
     }
@@ -588,8 +485,10 @@
     try {
       await navigator.clipboard.writeText(JSON.stringify({ input: transcript }, null, 2));
       applyStatus = 'Chat transcript copied as JSON.';
+      await patchChat({ applyStatus });
     } catch (caught) {
       error = `Could not copy chat transcript: ${messageFor(caught)}`;
+      await patchChat({ error });
     }
   }
 
@@ -611,6 +510,12 @@
 
   onMount(() => {
     void (async () => {
+      if (panelTabId === null) {
+        const currentWindow = await browser.windows.getCurrent();
+        if (currentWindow.id !== undefined) {
+          requestStorageKey = sidebarWindowRequestStorageKey(currentWindow.id);
+        }
+      }
       signedIn = await hasCodexSubscription();
       await Promise.all([readRequest(), loadChatSettings()]);
     })();
@@ -628,12 +533,29 @@
           changes[CHAT_SETTINGS_STORAGE_KEY].newValue,
         );
       }
+      if (areaName === 'local' && changes.pageScripts && request) {
+        void getPageScript(request.scriptId).then((nextScript) => {
+          script = nextScript;
+          if (nextScript) {
+            openOrigins = openOrigins.filter(
+              (origin) => !nextScript.origins.includes(origin),
+            );
+          }
+        });
+      }
       if (areaName === 'session' && changes[requestStorageKey]) {
-        const next = changes[requestStorageKey].newValue as
-          | SidebarScriptRequest
-          | undefined;
-        if (next?.nonce === request?.nonce) return;
         void readRequest();
+      }
+      if (
+        areaName === 'session' &&
+        request &&
+        changes[sidebarSessionStorageKey(request.sessionId)]
+      ) {
+        const change = changes[sidebarSessionStorageKey(request.sessionId)]!;
+        const next = change.newValue as
+          | import('../../utils/sidebar').SidebarSession
+          | undefined;
+        if (next) applyChatState(next.chat);
       }
     };
     browser.storage.onChanged.addListener(listener);
@@ -641,8 +563,7 @@
     return () => {
       browser.storage.onChanged.removeListener(listener);
       window.removeEventListener('keydown', handleDebugShortcut);
-      chatController?.abort();
-      if (selectingElement && request) cancelElementSelection(request.tabId);
+      cancelElementSelections();
     };
   });
 </script>
@@ -651,7 +572,7 @@
   <header>
     <div>
       <h1>{script?.name ?? 'Script editor'}</h1>
-      {#if script}
+      {#if script && request?.inScope}
         <p>{script.description}</p>
         <div class="origin-chips" aria-label="Script sites">
           {#each script.origins as origin}
@@ -724,6 +645,8 @@
 
   {#if loading}
     <div class="state">Loading script…</div>
+  {:else if request && !request.inScope}
+    <div class="state">This script does not run on the active tab. Switch to one of its sites to continue editing.</div>
   {:else if script}
     <section class="conversation" bind:this={messagesElement} aria-live="polite">
       {#if messages.length === 0}
@@ -790,8 +713,8 @@
             <button class="run-now" type="button" on:click={() => void runNow()} disabled={applying}>
               {applying ? 'Applying…' : 'Run now'}
             </button>
-            <button class="reload" type="button" on:click={() => void reloadPage()} disabled={applying}>
-              Reload page
+            <button class="reload" type="button" on:click={() => void reloadPages()} disabled={applying}>
+              Reload pages
             </button>
           </div>
         </div>
@@ -812,7 +735,10 @@
             type="button"
             aria-label="Remove selected element"
             title="Remove selected element"
-            on:click={() => selectedElement = null}
+            on:click={() => {
+              selectedElement = null;
+              void patchChat({ selectedElement: null });
+            }}
           >×</button>
         </div>
       {:else if selectingElement}
@@ -822,7 +748,11 @@
         <textarea
           rows="3"
           placeholder="Describe the change you want…"
-          bind:value={draft}
+          value={draft}
+          on:input={(event) => {
+            draft = event.currentTarget.value;
+            void patchChat({ draft });
+          }}
           on:keydown={handleKeydown}
           disabled={!signedIn}
         ></textarea>
