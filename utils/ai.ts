@@ -125,6 +125,7 @@ interface OpenAiResponse {
 
 interface StreamedResponse {
   response: OpenAiResponse;
+  streamedText: boolean;
   // Tool calls retain their output order between stream events and the final
   // response. IDs do not: Codex can expose an item id while writing a call and
   // a different call_id once it is executable.
@@ -546,6 +547,7 @@ async function readResponseStream(
   const streamedOutputByIndex = new Map<number, ResponseOutputItem>();
   let buffer = '';
   let completed: OpenAiResponse | null = null;
+  let streamedText = false;
 
   const handleEvent = (frame: string): void => {
     const data = frame
@@ -556,6 +558,11 @@ async function readResponseStream(
     if (!data || data === '[DONE]') return;
 
     const event = JSON.parse(data) as Record<string, unknown>;
+
+    if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+      streamedText = true;
+      callbacks.onTextDelta?.(event.delta);
+    }
 
     if (
       event.type === 'response.output_item.added' ||
@@ -671,7 +678,7 @@ async function readResponseStream(
     }
     toolActivityKeys.push(activityKey);
   }
-  return { response: finalResponse, toolActivityKeys };
+  return { response: finalResponse, streamedText, toolActivityKeys };
 }
 
 async function createResponse(
@@ -843,10 +850,8 @@ export async function chatWithScript(
 
     if (calls.length === 0) {
       const message = outputText(answer) || 'Done.';
-      // Only publish text from the accepted terminal response. Intermediate
-      // responses may include text alongside tool calls; displaying that text
-      // would make the agent look finished while it is still working.
-      callbacks.onTextDelta?.(message);
+      // Some compatible backends only include text on the completed response.
+      if (!streamed.streamedText) callbacks.onTextDelta?.(message);
       return { message, script };
     }
 
