@@ -142,6 +142,75 @@
     return `${Math.round(usage.usedPercent)}% context used · ${usage.inputTokens.toLocaleString()} / ${usage.contextWindowTokens.toLocaleString()} tokens`;
   }
 
+  type AssistantSanitizer = {
+    allowAttribute: (attribute: string) => boolean;
+  };
+
+  type AssistantSanitizerConstructor = new (
+    configuration?: 'default',
+  ) => AssistantSanitizer;
+
+  type SanitizingElement = HTMLElement & {
+    setHTML?: (
+      html: string,
+      options?: { sanitizer: AssistantSanitizer },
+    ) => void;
+  };
+
+  function createAssistantSanitizer(): AssistantSanitizer | null {
+    const SanitizerApi = (
+      globalThis as typeof globalThis & {
+        Sanitizer?: AssistantSanitizerConstructor;
+      }
+    ).Sanitizer;
+    if (!SanitizerApi) return null;
+
+    try {
+      const sanitizer = new SanitizerApi('default');
+      sanitizer.allowAttribute('style');
+      return sanitizer;
+    } catch {
+      return null;
+    }
+  }
+
+  const assistantSanitizer = createAssistantSanitizer();
+
+  function renderAssistantHtml(node: HTMLElement, initialContent: string) {
+    const render = (content: string): void => {
+      const sanitizingNode = node as SanitizingElement;
+      if (
+        typeof sanitizingNode.setHTML !== 'function'
+        || !assistantSanitizer
+      ) {
+        node.classList.add('plain-text-fallback');
+        node.textContent = content;
+        return;
+      }
+
+      node.classList.remove('plain-text-fallback');
+      sanitizingNode.setHTML(content, { sanitizer: assistantSanitizer });
+      for (const anchor of node.querySelectorAll<HTMLAnchorElement>('a[href]')) {
+        const href = anchor.getAttribute('href');
+        try {
+          const url = new URL(href ?? '');
+          if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+            throw new TypeError('Unsupported link protocol.');
+          }
+          anchor.href = url.href;
+          anchor.target = '_blank';
+          anchor.rel = 'noopener noreferrer';
+          anchor.referrerPolicy = 'no-referrer';
+        } catch {
+          anchor.removeAttribute('href');
+        }
+      }
+    };
+
+    render(initialContent);
+    return { update: render };
+  }
+
   function normalizedChatSettings(value: unknown): ChatSettings {
     const candidate = value && typeof value === 'object'
       ? value as Partial<ChatSettings>
@@ -719,7 +788,14 @@
                 </div>
               </div>
             {/if}
-            <p>{message.content}</p>
+            {#if message.role === 'assistant'}
+              <div
+                class="assistant-content"
+                use:renderAssistantHtml={message.content}
+              ></div>
+            {:else}
+              <p>{message.content}</p>
+            {/if}
           </article>
         {/if}
       {/each}

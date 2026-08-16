@@ -11,6 +11,9 @@ export default defineConfig({
     name: 'Vibext',
     description:
       'Prompt a chatbot to create and retain changes for web pages.',
+    content_security_policy: {
+      extension_pages: "script-src 'self'; object-src 'self'; img-src 'none'; font-src 'none'; media-src 'none';",
+    },
     permissions: [
       'activeTab',
       'alarms',

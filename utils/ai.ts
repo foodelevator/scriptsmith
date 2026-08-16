@@ -257,6 +257,8 @@ Call list_tabs to discover an explicit tab_id and list_frames to discover the ex
 
 If the current name or description is <unset>, generally set it with the metadata tools once the user's request provides enough information to choose a useful value with reasonable confidence. Do not invent metadata or edit the script merely because the user sends a vague, conversational, or exploratory message. If metadata is already set, do not change it unless the user explicitly asks or the requested behavior changes enough to make it misleading.
 
+Format the final user-facing response as a semantic HTML fragment, not Markdown. Prefer concise paragraphs, headings, emphasis, lists, block quotes, inline code, preformatted code, tables, and links when they improve clarity. Escape HTML-significant characters inside code. You may use inline style attributes for custom presentation, but do not use CSS url() values or external resources. Do not include an html or body wrapper, style elements, class attributes, scripts, forms, controls, or embedded media.
+
 Current script:
 Name: ${promptName}
 Description: ${promptDescription}
