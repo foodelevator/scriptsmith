@@ -1,9 +1,9 @@
 <script lang="ts">
   import {
+    downloadVibextScriptFile,
     getScriptsForOrigin,
     originFromUrl,
     removePageScript,
-    serializeVibextScriptFile,
     setPageScriptEnabled,
     type PageScript,
   } from '../../utils/scripts';
@@ -33,7 +33,7 @@
   let windowId: number | undefined;
   let loading = true;
   let working = false;
-  let openingImporter = false;
+  let openingManager = false;
   let togglingScriptId: string | null = null;
   let reloadRequired = false;
   let reloading = false;
@@ -165,7 +165,7 @@
   }
 
   async function openEditor(script: PageScript): Promise<void> {
-    if (tabId === null || working || openingImporter) return;
+    if (tabId === null || working || openingManager) return;
     working = true;
     error = '';
     status = '';
@@ -185,7 +185,7 @@
   }
 
   async function addScript(): Promise<void> {
-    if (!origin || working || openingImporter) return;
+    if (!origin || working || openingManager) return;
     working = true;
     error = '';
 
@@ -201,7 +201,7 @@
   }
 
   async function toggleScript(script: PageScript, enabled: boolean): Promise<void> {
-    if (togglingScriptId !== null || working || openingImporter) return;
+    if (togglingScriptId !== null || working || openingManager) return;
     error = '';
     status = '';
     togglingScriptId = script.id;
@@ -243,9 +243,14 @@
   }
 
   async function remove(script: PageScript): Promise<void> {
-    if (working || openingImporter || togglingScriptId !== null) return;
+    if (working || openingManager || togglingScriptId !== null) return;
     error = '';
     status = '';
+
+    const confirmed = window.confirm(
+      `Remove “${script.name}”?\n\nThis permanently deletes the script and cannot be undone.`,
+    );
+    if (!confirmed) return;
 
     try {
       await removePageScript(script);
@@ -256,58 +261,31 @@
     }
   }
 
-  function exportFilename(name: string): string {
-    const stem = name
-      .normalize('NFKD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 80) || 'script';
-    return `${stem}.vibext.json`;
-  }
-
   function exportScript(script: PageScript): void {
     error = '';
     status = '';
     try {
-      const blob = new Blob([serializeVibextScriptFile(script)], {
-        type: 'application/json;charset=utf-8',
-      });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = exportFilename(script.name);
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+      downloadVibextScriptFile(script);
       status = `${script.name} exported.`;
     } catch (caught) {
       error = messageFor(caught);
     }
   }
 
-  async function openImporter(): Promise<void> {
-    if (working || openingImporter || togglingScriptId !== null) return;
-    openingImporter = true;
+  async function openManager(): Promise<void> {
+    if (working || openingManager || togglingScriptId !== null) return;
+    openingManager = true;
     error = '';
     status = '';
     try {
-      const parameters = new URLSearchParams();
-      if (origin) parameters.set('origin', origin);
-      if (tabId !== null) parameters.set('tabId', String(tabId));
-      await browser.windows.create({
-        url: browser.runtime.getURL(`/import.html?${parameters}`),
-        type: 'popup',
-        width: 420,
-        height: 300,
+      await browser.tabs.create({
+        url: browser.runtime.getURL('/scripts.html'),
       });
       window.close();
     } catch (caught) {
       error = messageFor(caught);
     } finally {
-      openingImporter = false;
+      openingManager = false;
     }
   }
 
@@ -382,7 +360,7 @@
                   role="switch"
                   checked={script.enabled}
                   aria-label={`${script.enabled ? 'Disable' : 'Enable'} ${script.name}`}
-                  disabled={working || openingImporter || togglingScriptId !== null}
+                  disabled={working || openingManager || togglingScriptId !== null}
                   on:change={(event) => void toggleScript(script, event.currentTarget.checked)}
                 />
                 <span class="toggle-track" aria-hidden="true"><span></span></span>
@@ -393,7 +371,7 @@
                 aria-label={`Remove ${script.name}`}
                 title={`Remove ${script.name}`}
                 on:click={() => void remove(script)}
-                disabled={working || openingImporter || togglingScriptId !== null}
+                disabled={working || openingManager || togglingScriptId !== null}
               >×</button>
               <button
                 class="export-script"
@@ -401,7 +379,7 @@
                 aria-label={`Export ${script.name}`}
                 title={`Export ${script.name}`}
                 on:click={() => exportScript(script)}
-                disabled={working || openingImporter || togglingScriptId !== null}
+                disabled={working || openingManager || togglingScriptId !== null}
               >
                 <svg aria-hidden="true" viewBox="0 0 20 20">
                   <path d="M10 3v9m0 0 3.5-3.5M10 12 6.5 8.5M4 15.5h12" />
@@ -413,7 +391,7 @@
                 aria-label={`Edit ${script.name}`}
                 title={`Edit ${script.name}`}
                 on:click={() => void openEditor(script)}
-                disabled={working || openingImporter || togglingScriptId !== null}
+                disabled={working || openingManager || togglingScriptId !== null}
               >
                 <svg aria-hidden="true" viewBox="0 0 20 20">
                   <path d="m4 16 3.2-.7 8-8a1.8 1.8 0 0 0-2.5-2.5l-8 8L4 16Z" />
@@ -433,7 +411,7 @@
       <button
         type="button"
         on:click={() => void reloadPage()}
-        disabled={reloading || openingImporter || togglingScriptId !== null}
+        disabled={reloading || openingManager || togglingScriptId !== null}
       >{reloading ? 'Reloading…' : 'Reload page'}</button>
     </div>
   {/if}
@@ -443,14 +421,14 @@
       class="add-script"
       type="button"
       on:click={() => void addScript()}
-      disabled={!origin || tabId === null || working || openingImporter || togglingScriptId !== null}
+      disabled={!origin || tabId === null || working || openingManager || togglingScriptId !== null}
     >{working ? 'Opening…' : 'Add script'}</button>
     <button
-      class="import-script"
+      class="manage-scripts"
       type="button"
-      on:click={() => void openImporter()}
-      disabled={working || openingImporter || togglingScriptId !== null}
-    >{openingImporter ? 'Opening…' : 'Import script'}</button>
+      on:click={() => void openManager()}
+      disabled={working || openingManager || togglingScriptId !== null}
+    >{openingManager ? 'Opening…' : 'Manage all scripts'}</button>
   </div>
 
   <section class="account" aria-labelledby="account-heading">

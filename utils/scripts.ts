@@ -114,6 +114,31 @@ export function serializeVibextScriptFile(script: PageScript): string {
   return `${JSON.stringify(payload, null, 2)}\n`;
 }
 
+export function vibextScriptFilename(name: string): string {
+  const stem = name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'script';
+  return `${stem}.vibext.json`;
+}
+
+export function downloadVibextScriptFile(script: PageScript): void {
+  const blob = new Blob([serializeVibextScriptFile(script)], {
+    type: 'application/json;charset=utf-8',
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = vibextScriptFilename(script.name);
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 function normalizePageScript(value: unknown): PageScript | null {
   if (!value || typeof value !== 'object') return null;
   const legacy = value as Partial<PageScript> & { origin?: unknown };
@@ -277,11 +302,50 @@ export async function matchingTabsInWindow(
   script: PageScript,
   windowId: number,
 ): Promise<Browser.tabs.Tab[]> {
-  const tabs = await browser.tabs.query({ windowId });
+  return matchingTabsForOrigins(script.origins, windowId);
+}
+
+export async function matchingTabsForOrigins(
+  origins: string[],
+  windowId?: number,
+): Promise<Browser.tabs.Tab[]> {
+  const tabs = await browser.tabs.query(windowId === undefined ? {} : { windowId });
+  const targets = new Set(origins);
   return tabs.filter((tab) => {
     const origin = originFromUrl(tab.url);
-    return origin !== null && script.origins.includes(origin);
+    return origin !== null && targets.has(origin);
   });
+}
+
+export interface ReloadTabsForOriginsResult {
+  matched: number;
+  reloaded: number;
+  failedOrigins: string[];
+}
+
+export async function reloadTabsForOrigins(
+  origins: string[],
+): Promise<ReloadTabsForOriginsResult> {
+  const tabs = await matchingTabsForOrigins(origins);
+  const reloadable = tabs.flatMap((tab) => tab.id === undefined ? [] : [{ id: tab.id, url: tab.url }]);
+  const results = await Promise.allSettled(
+    reloadable.map(({ id }) => browser.tabs.reload(id)),
+  );
+  const failedOrigins = new Set<string>();
+  let reloaded = 0;
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      reloaded += 1;
+      return;
+    }
+    const origin = originFromUrl(reloadable[index]?.url);
+    if (origin) failedOrigins.add(origin);
+  });
+  return {
+    matched: reloadable.length,
+    reloaded,
+    failedOrigins: [...failedOrigins],
+  };
 }
 
 export async function runPageScriptNow(

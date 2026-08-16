@@ -252,7 +252,7 @@ header p {
   flex: 1;
 }
 
-.import-script {
+.manage-scripts {
   border: 1px solid var(--border-strong);
   border-radius: 9px;
   padding: 8px 15px;
@@ -262,7 +262,7 @@ header p {
   font-weight: 600;
 }
 
-.import-script:hover:not(:disabled) {
+.manage-scripts:hover:not(:disabled) {
   background: var(--surface-2);
 }
 
