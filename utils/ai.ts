@@ -352,8 +352,7 @@ async function resolveEvaluationTarget(
   if (windowId !== undefined && tab.windowId !== windowId) {
     throw new Error(`Tab ${tabId} is outside this editing session's window. Call list_tabs to see the available tabs.`);
   }
-  const frame = (await browser.webNavigation.getAllFrames({ tabId }))
-    ?.find((candidate) => candidate.frameId === frameId);
+  const frame = await browser.webNavigation.getFrame({ tabId, frameId });
   if (!frame) {
     throw new Error(`Frame ${frameId} no longer exists in tab ${tabId}. Call list_frames again.`);
   }

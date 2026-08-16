@@ -15,12 +15,9 @@ export default defineConfig({
       extension_pages: "script-src 'self'; object-src 'self'; img-src 'none'; font-src 'none'; media-src 'none';",
     },
     permissions: [
-      'activeTab',
       'alarms',
-      'clipboardWrite',
       'scripting',
       'storage',
-      'tabs',
       'userScripts',
       'webNavigation',
     ],
