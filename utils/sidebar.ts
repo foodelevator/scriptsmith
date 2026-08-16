@@ -57,7 +57,8 @@ export type SidebarCoordinatorMessage =
   | { type: 'vibext:sidebar:reconcile' }
   | { type: 'vibext:sidebar:patch-chat'; sessionId: string; patch: Partial<SidebarChatState> }
   | { type: 'vibext:sidebar:start-chat'; sessionId: string; settings: import('./ai').ChatSettings }
-  | { type: 'vibext:sidebar:stop-chat'; sessionId: string };
+  | { type: 'vibext:sidebar:stop-chat'; sessionId: string }
+  | { type: 'vibext:sidebar:clear-chat'; sessionId: string };
 
 export function sidebarRequestStorageKey(tabId: number): string {
   return `${SIDEBAR_REQUEST_STORAGE_PREFIX}${tabId}`;

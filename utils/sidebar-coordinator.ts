@@ -394,6 +394,19 @@ export function startSidebarCoordinator(): void {
       }
       return Promise.resolve({ ok: true });
     }
+    if (message.type === 'vibext:sidebar:clear-chat' && message.sessionId) {
+      return mutateChat(message.sessionId, (state) => state.sending
+        ? state
+        : {
+            ...state,
+            messages: [],
+            transcript: [],
+            contextUsage: null,
+            draft: '',
+            error: '',
+            selectedElement: null,
+          });
+    }
     return undefined;
   });
 }

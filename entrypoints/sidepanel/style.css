@@ -25,6 +25,21 @@ header > div {
   min-width: 0;
 }
 
+.header-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.header-title-row h1 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 h1 {
   font-size: 15px;
   font-weight: 650;
@@ -507,6 +522,36 @@ textarea::placeholder {
   grid-template-columns: auto minmax(112px, 1fr) auto;
   align-items: end;
   gap: 10px;
+}
+
+.clear-conversation {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--danger-text);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.clear-conversation:hover:not(:disabled) {
+  border-color: var(--danger-text);
+  background: var(--danger-subtle);
+}
+
+.clear-conversation svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .model-options {

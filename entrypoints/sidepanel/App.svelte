@@ -427,6 +427,15 @@
     });
   }
 
+  async function clearConversation(): Promise<void> {
+    if (!request || sending || selectingElement) return;
+    settingsOpen = false;
+    await browser.runtime.sendMessage({
+      type: 'vibext:sidebar:clear-chat',
+      sessionId: request.sessionId,
+    });
+  }
+
   async function runNow(): Promise<void> {
     if (!script || !request || applying) return;
     applying = true;
@@ -571,7 +580,21 @@
 <main>
   <header>
     <div>
-      <h1>{script?.name ?? 'Script editor'}</h1>
+      <div class="header-title-row">
+        <h1>{script?.name ?? 'Script editor'}</h1>
+        {#if script && request?.inScope}
+          <button
+            class="clear-conversation"
+            type="button"
+            disabled={sending || selectingElement || (messages.length === 0 && !draft && !selectedElement)}
+            title="Clear the shared conversation"
+            on:click={() => void clearConversation()}
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6M4 4v4.6h4.6" /></svg>
+            Clear conversation
+          </button>
+        {/if}
+      </div>
       {#if script && request?.inScope}
         <p>{script.description}</p>
         <div class="origin-chips" aria-label="Script sites">
