@@ -3,6 +3,7 @@
   import {
     chatWithScript,
     ScriptChatAbortedError,
+    type ContextUsage,
     type ChatTranscriptItem,
     type ChatMessage,
     type SelectedElementReference,
@@ -54,6 +55,7 @@
   let script: PageScript | null = null;
   let messages: DisplayMessage[] = [];
   let transcript: ChatTranscriptItem[] = [];
+  let contextUsage: ContextUsage | null = null;
   let draft = '';
   let signedIn = false;
   let loading = true;
@@ -75,6 +77,17 @@
 
   function messageFor(caught: unknown): string {
     return caught instanceof Error ? caught.message : String(caught);
+  }
+
+  function contextUsageColor(usedPercent: number): string {
+    if (usedPercent < 20) return 'var(--usage-high)';
+    if (usedPercent < 50) return 'var(--usage-medium)';
+    if (usedPercent < 80) return 'var(--usage-low)';
+    return 'var(--usage-critical)';
+  }
+
+  function contextUsageLabel(usage: ContextUsage): string {
+    return `${Math.round(usage.usedPercent)}% context used · ${usage.inputTokens.toLocaleString()} / ${usage.contextWindowTokens.toLocaleString()} tokens`;
   }
 
   function isMissingContentScript(caught: unknown): boolean {
@@ -176,6 +189,7 @@
         selectedElement = null;
         messages = [];
         transcript = [];
+        contextUsage = null;
         scriptChanged = false;
         applyStatus = '';
       }
@@ -387,6 +401,9 @@
           },
           onTranscriptItems(items) {
             transcript = [...transcript, ...items];
+          },
+          onContextUsage(usage) {
+            contextUsage = usage;
           },
           onTextDelta(delta) {
             receivedText = true;
@@ -731,21 +748,52 @@
             </button>
             <span>↵ send · ⇧↵ newline</span>
           </div>
-          <button
-            class="send"
-            class:stop={sending}
-            type="button"
-            on:click={() => sending ? stopSending() : void send()}
-            disabled={sending ? stopping : selectingElement || !draft.trim() || !signedIn}
-            aria-label={sending ? 'Stop agent request' : 'Send message'}
-            title={sending ? 'Stop agent request' : 'Send message'}
-          >
-            {#if sending}
-              <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+          <div class="composer-actions">
+            {#if contextUsage}
+              {@const usageLabel = contextUsageLabel(contextUsage)}
+              <div
+                class="context-ring"
+                style={`--usage-color: ${contextUsageColor(contextUsage.usedPercent)}`}
+                title={usageLabel}
+                role="img"
+                aria-label={usageLabel}
+              >
+                <svg aria-hidden="true" viewBox="0 0 36 36">
+                  <circle class="context-track" cx="18" cy="18" r="15.5" pathLength="100" />
+                  <circle
+                    class="context-value"
+                    cx="18"
+                    cy="18"
+                    r="15.5"
+                    pathLength="100"
+                    stroke-dasharray={`${contextUsage.usedPercent} 100`}
+                  />
+                </svg>
+              </div>
             {:else}
-              <svg aria-hidden="true" viewBox="0 0 24 24" class="send-arrow"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
+              <span
+                class="context-placeholder"
+                title="Context usage is available after the first response"
+                role="img"
+                aria-label="Context usage is available after the first response"
+              ></span>
             {/if}
-          </button>
+            <button
+              class="send"
+              class:stop={sending}
+              type="button"
+              on:click={() => sending ? stopSending() : void send()}
+              disabled={sending ? stopping : selectingElement || !draft.trim() || !signedIn}
+              aria-label={sending ? 'Stop agent request' : 'Send message'}
+              title={sending ? 'Stop agent request' : 'Send message'}
+            >
+              {#if sending}
+                <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+              {:else}
+                <svg aria-hidden="true" viewBox="0 0 24 24" class="send-arrow"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
+              {/if}
+            </button>
+          </div>
         </div>
       </div>
     </section>

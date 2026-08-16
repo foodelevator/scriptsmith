@@ -13,6 +13,7 @@ import {
 } from './scripts';
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-sol';
+export const DEFAULT_OPENAI_CONTEXT_WINDOW_TOKENS = 1_050_000;
 const OPENAI_TIMEOUT_MS = 60_000;
 const UNTITLED_SCRIPT_NAME = 'Untitled script';
 const UNSET_SCRIPT_DESCRIPTION = 'Describe what you want this script to do in the chat.';
@@ -42,6 +43,12 @@ export interface ScriptChatResponse {
   script: PageScript;
 }
 
+export interface ContextUsage {
+  inputTokens: number;
+  contextWindowTokens: number;
+  usedPercent: number;
+}
+
 export interface ScriptChatCallbacks {
   onResponseStart?(): void;
   onTextDelta?(delta: string): void;
@@ -53,6 +60,7 @@ export interface ScriptChatCallbacks {
   onToolResult?(callId: string): void;
   onScriptChange?(script: PageScript): void;
   onTranscriptItems?(items: ChatTranscriptItem[]): void;
+  onContextUsage?(usage: ContextUsage): void;
 }
 
 export type ChatTranscriptItem = Record<string, unknown>;
@@ -84,6 +92,7 @@ interface OpenAiResponse {
   status?: string;
   incomplete_details?: { reason?: string } | null;
   error?: { message?: string } | null;
+  usage: { input_tokens: number };
 }
 
 interface StreamedResponse {
@@ -767,6 +776,14 @@ export async function chatWithScript(
     callbacks.onResponseStart?.();
     const streamed = await createResponse(instructions, input, callbacks, signal);
     const answer = streamed.response;
+    callbacks.onContextUsage?.({
+      inputTokens: answer.usage.input_tokens,
+      contextWindowTokens: DEFAULT_OPENAI_CONTEXT_WINDOW_TOKENS,
+      usedPercent: Math.min(
+        100,
+        answer.usage.input_tokens / DEFAULT_OPENAI_CONTEXT_WINDOW_TOKENS * 100,
+      ),
+    });
     const output = answer.output ?? [];
     const calls = output.filter(isToolCall);
 
