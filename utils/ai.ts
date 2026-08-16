@@ -12,9 +12,33 @@ import {
   type PageScript,
 } from './scripts';
 
-export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-sol';
+export type OpenAIModel =
+  | 'gpt-5.6-luna'
+  | 'gpt-5.6-terra'
+  | 'gpt-5.6-sol';
+
+export type ReasoningEffort =
+  | 'none'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max';
+
+export interface ChatSettings {
+  model: OpenAIModel;
+  reasoningEffort: ReasoningEffort;
+  fastMode: boolean;
+}
+
+export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
+  model: 'gpt-5.6-sol',
+  reasoningEffort: 'medium',
+  fastMode: false,
+};
+export const DEFAULT_OPENAI_MODEL = DEFAULT_CHAT_SETTINGS.model;
 export const DEFAULT_OPENAI_CONTEXT_WINDOW_TOKENS = 1_050_000;
-const OPENAI_TIMEOUT_MS = 60_000;
+const OPENAI_TIMEOUT_MS = 5 * 60_000;
 const UNTITLED_SCRIPT_NAME = 'Untitled script';
 const UNSET_SCRIPT_DESCRIPTION = 'Describe what you want this script to do in the chat.';
 
@@ -36,6 +60,7 @@ export interface ScriptChatRequest {
   scriptId: string;
   tabId: number;
   messages: ChatMessage[];
+  settings: ChatSettings;
   /** Canonical Responses API history from earlier turns. */
   history?: ChatTranscriptItem[];
 }
@@ -634,6 +659,7 @@ async function readResponseStream(
 async function createResponse(
   instructions: string,
   input: ResponseInputItem[],
+  settings: ChatSettings,
   callbacks: ScriptChatCallbacks,
   signal?: AbortSignal,
 ): Promise<StreamedResponse> {
@@ -663,13 +689,14 @@ async function createResponse(
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: DEFAULT_OPENAI_MODEL,
+            model: settings.model,
             instructions,
             input,
             tools,
             tool_choice: 'auto',
             parallel_tool_calls: true,
-            reasoning: { effort: 'low', summary: 'auto' },
+            reasoning: { effort: settings.reasoningEffort, summary: 'auto' },
+            ...(settings.fastMode ? { service_tier: 'priority' } : {}),
             text: { verbosity: 'low' },
             store: false,
             // Required when statelessly passing reasoning items back after tools.
@@ -697,7 +724,7 @@ async function createResponse(
   } catch (error) {
     if (controller.signal.aborted) {
       if (!timedOut && signal?.aborted) throw new ScriptChatAbortedError();
-      throw new Error('Codex did not respond within 60 seconds. Try again.');
+      throw new Error('Codex did not respond within five minutes. Try again.');
     }
     throw error;
   } finally {
@@ -783,7 +810,13 @@ export async function chatWithScript(
     // response can begin. This also gives the UI a definitive recovery point
     // if Codex changed an activity identifier mid-stream.
     callbacks.onResponseStart?.();
-    const streamed = await createResponse(instructions, input, callbacks, signal);
+    const streamed = await createResponse(
+      instructions,
+      input,
+      request.settings,
+      callbacks,
+      signal,
+    );
     const answer = streamed.response;
     callbacks.onContextUsage?.({
       inputTokens: answer.usage.input_tokens,

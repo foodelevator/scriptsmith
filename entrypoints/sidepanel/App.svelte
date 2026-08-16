@@ -1,11 +1,15 @@
 <script lang="ts">
-  import { Combobox } from 'bits-ui';
+  import { Combobox, Popover, Slider } from 'bits-ui';
   import {
     chatWithScript,
+    DEFAULT_CHAT_SETTINGS,
     ScriptChatAbortedError,
+    type ChatSettings,
     type ContextUsage,
     type ChatTranscriptItem,
     type ChatMessage,
+    type OpenAIModel,
+    type ReasoningEffort,
     type SelectedElementReference,
   } from '../../utils/ai';
   import {
@@ -43,6 +47,25 @@
     element?: Pick<SelectedElementReference, 'selector' | 'label' | 'html'>;
   };
 
+  const CHAT_SETTINGS_STORAGE_KEY = 'vibext:chat-settings';
+  const modelOptions: { value: OpenAIModel; label: string }[] = [
+    { value: 'gpt-5.6-luna', label: 'Luna' },
+    { value: 'gpt-5.6-terra', label: 'Terra' },
+    { value: 'gpt-5.6-sol', label: 'Sol' },
+  ];
+  const reasoningOptions: {
+    value: ReasoningEffort;
+    label: string;
+    shortLabel: string;
+  }[] = [
+    { value: 'none', label: 'None', shortLabel: 'N' },
+    { value: 'low', label: 'Low', shortLabel: 'L' },
+    { value: 'medium', label: 'Medium', shortLabel: 'M' },
+    { value: 'high', label: 'High', shortLabel: 'H' },
+    { value: 'xhigh', label: 'XHigh', shortLabel: 'XH' },
+    { value: 'max', label: 'Max', shortLabel: 'MX' },
+  ];
+
   const tabIdParameter = new URLSearchParams(location.search).get('tabId');
   const panelTabId = tabIdParameter && /^\d+$/.test(tabIdParameter)
     ? Number(tabIdParameter)
@@ -74,6 +97,20 @@
   let removingOrigin: string | null = null;
   let selectionRequestId = 0;
   let messagesElement: HTMLElement;
+  let chatSettings: ChatSettings = { ...DEFAULT_CHAT_SETTINGS };
+  let settingsOpen = false;
+  let settingsWrite: Promise<void> = Promise.resolve();
+
+  $: selectedModel = modelOptions.find(
+    (option) => option.value === chatSettings.model,
+  ) ?? modelOptions[2]!;
+  $: reasoningIndex = Math.max(
+    0,
+    reasoningOptions.findIndex(
+      (option) => option.value === chatSettings.reasoningEffort,
+    ),
+  );
+  $: selectedReasoning = reasoningOptions[reasoningIndex]!;
 
   function messageFor(caught: unknown): string {
     return caught instanceof Error ? caught.message : String(caught);
@@ -88,6 +125,51 @@
 
   function contextUsageLabel(usage: ContextUsage): string {
     return `${Math.round(usage.usedPercent)}% context used · ${usage.inputTokens.toLocaleString()} / ${usage.contextWindowTokens.toLocaleString()} tokens`;
+  }
+
+  function normalizedChatSettings(value: unknown): ChatSettings {
+    const candidate = value && typeof value === 'object'
+      ? value as Partial<ChatSettings>
+      : {};
+    return {
+      model: modelOptions.some((option) => option.value === candidate.model)
+        ? candidate.model as OpenAIModel
+        : DEFAULT_CHAT_SETTINGS.model,
+      reasoningEffort: reasoningOptions.some(
+        (option) => option.value === candidate.reasoningEffort,
+      )
+        ? candidate.reasoningEffort as ReasoningEffort
+        : DEFAULT_CHAT_SETTINGS.reasoningEffort,
+      fastMode: typeof candidate.fastMode === 'boolean'
+        ? candidate.fastMode
+        : DEFAULT_CHAT_SETTINGS.fastMode,
+    };
+  }
+
+  async function loadChatSettings(): Promise<void> {
+    try {
+      const stored = await browser.storage.local.get(CHAT_SETTINGS_STORAGE_KEY);
+      chatSettings = normalizedChatSettings(stored[CHAT_SETTINGS_STORAGE_KEY]);
+    } catch (caught) {
+      error = `Could not load agent settings: ${messageFor(caught)}`;
+    }
+  }
+
+  function updateChatSettings(next: Partial<ChatSettings>): void {
+    chatSettings = { ...chatSettings, ...next };
+    const snapshot = { ...chatSettings };
+    settingsWrite = settingsWrite
+      .then(() => browser.storage.local.set({
+        [CHAT_SETTINGS_STORAGE_KEY]: snapshot,
+      }))
+      .catch((caught) => {
+        error = `Could not save agent settings: ${messageFor(caught)}`;
+      });
+  }
+
+  function updateReasoningIndex(index: number): void {
+    const option = reasoningOptions[Math.round(index)];
+    if (option) updateChatSettings({ reasoningEffort: option.value });
   }
 
   function isMissingContentScript(caught: unknown): boolean {
@@ -292,6 +374,7 @@
     messages = [...messages, userMessage];
     selectedElement = null;
     draft = '';
+    settingsOpen = false;
     let assistantIndex: number | null = null;
     let receivedText = false;
     let scriptEditedDuringTurn = false;
@@ -362,6 +445,7 @@
           scriptId: request.scriptId,
           tabId: request.tabId,
           messages: conversation,
+          settings: { ...chatSettings },
           // Unlike the rendered message list, this includes reasoning, tool
           // calls, and tool outputs from turns stopped by the user.
           history: transcript,
@@ -528,7 +612,7 @@
   onMount(() => {
     void (async () => {
       signedIn = await hasCodexSubscription();
-      await readRequest();
+      await Promise.all([readRequest(), loadChatSettings()]);
     })();
 
     const listener = (
@@ -538,6 +622,11 @@
       if (areaName === 'local' && changes[CODEX_REFRESH_TOKEN_STORAGE_KEY]) {
         signedIn =
           typeof changes[CODEX_REFRESH_TOKEN_STORAGE_KEY].newValue === 'string';
+      }
+      if (areaName === 'local' && changes[CHAT_SETTINGS_STORAGE_KEY]) {
+        chatSettings = normalizedChatSettings(
+          changes[CHAT_SETTINGS_STORAGE_KEY].newValue,
+        );
       }
       if (areaName === 'session' && changes[requestStorageKey]) {
         const next = changes[requestStorageKey].newValue as
@@ -783,6 +872,100 @@
                 aria-label="Context usage is available after the first response"
               ></span>
             {/if}
+            <Popover.Root bind:open={settingsOpen}>
+              <Popover.Trigger
+                class="agent-settings-trigger"
+                disabled={sending || !signedIn}
+                aria-label={`Agent settings: ${selectedModel.label}, ${selectedReasoning.label} thinking${chatSettings.fastMode ? ', Fast mode on' : ''}`}
+                title={`${selectedModel.label} · ${selectedReasoning.label}${chatSettings.fastMode ? ' · Fast' : ''}`}
+              >
+                <span class="settings-model-symbol" aria-hidden="true">
+                  {#if chatSettings.model === 'gpt-5.6-luna'}
+                    <svg viewBox="0 0 24 24"><path d="M20.2 14.4A8.4 8.4 0 0 1 9.6 3.8a8.5 8.5 0 1 0 10.6 10.6Z" /></svg>
+                  {:else if chatSettings.model === 'gpt-5.6-terra'}
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" /><path class="terra-land" d="m5.1 7.2 2.6-2.1 2.6.5.9 1.5-1.3 1-.3 1.8-1.7.7-.3 1.7-1.5-.3-.7-1.4-1.6-.6M13.1 4.6l3.3 1.2 2.1 2.3-.7 1.5-2.2-.5-.9 1.2 1.3 1.2-.6 2.1-1.5.7-.4 2.7-1.5 1.2-1-2.5.8-2-1.1-1.4.9-2.1 1.6-.6-.7-1.8Z" /></svg>
+                  {:else}
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.8" /><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" /></svg>
+                  {/if}
+                </span>
+                <span>{selectedReasoning.shortLabel}</span>
+                {#if chatSettings.fastMode}
+                  <svg class="trigger-fast" aria-hidden="true" viewBox="0 0 24 24"><path d="m13.5 2-8 12h6l-1 8 8-12h-6l1-8Z" /></svg>
+                {/if}
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Content
+                  class="agent-settings-popover"
+                  side="top"
+                  align="end"
+                  sideOffset={10}
+                  collisionPadding={12}
+                >
+                  <div class="agent-settings-row" aria-label="Agent settings">
+                    <div class="model-options" role="group" aria-label="Model">
+                      {#each modelOptions as option}
+                        <button
+                          class="model-option"
+                          class:selected={chatSettings.model === option.value}
+                          type="button"
+                          disabled={sending}
+                          aria-label={option.label}
+                          aria-pressed={chatSettings.model === option.value}
+                          title={option.label}
+                          on:click={() => updateChatSettings({ model: option.value })}
+                        >
+                          {#if option.value === 'gpt-5.6-luna'}
+                            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20.2 14.4A8.4 8.4 0 0 1 9.6 3.8a8.5 8.5 0 1 0 10.6 10.6Z" /></svg>
+                          {:else if option.value === 'gpt-5.6-terra'}
+                            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" /><path class="terra-land" d="m5.1 7.2 2.6-2.1 2.6.5.9 1.5-1.3 1-.3 1.8-1.7.7-.3 1.7-1.5-.3-.7-1.4-1.6-.6M13.1 4.6l3.3 1.2 2.1 2.3-.7 1.5-2.2-.5-.9 1.2 1.3 1.2-.6 2.1-1.5.7-.4 2.7-1.5 1.2-1-2.5.8-2-1.1-1.4.9-2.1 1.6-.6-.7-1.8Z" /></svg>
+                          {:else}
+                            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.8" /><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" /></svg>
+                          {/if}
+                        </button>
+                      {/each}
+                    </div>
+                    <div class="reasoning-control">
+                      <Slider.Root
+                        class="reasoning-slider"
+                        type="single"
+                        min={0}
+                        max={reasoningOptions.length - 1}
+                        step={1}
+                        value={reasoningIndex}
+                        disabled={sending}
+                        onValueChange={updateReasoningIndex}
+                      >
+                        <Slider.Range class="reasoning-range" />
+                        {#each reasoningOptions as _, index}
+                          <Slider.Tick class="reasoning-tick" {index} />
+                        {/each}
+                        <Slider.ThumbLabel class="reasoning-label" index={0}>
+                          {selectedReasoning.label}
+                        </Slider.ThumbLabel>
+                        <Slider.Thumb
+                          class="reasoning-thumb"
+                          index={0}
+                          aria-label="Thinking level"
+                          aria-valuetext={selectedReasoning.label}
+                        />
+                      </Slider.Root>
+                    </div>
+                    <button
+                      class="fast-mode"
+                      class:active={chatSettings.fastMode}
+                      type="button"
+                      disabled={sending}
+                      aria-label={`Fast mode ${chatSettings.fastMode ? 'on' : 'off'}`}
+                      aria-pressed={chatSettings.fastMode}
+                      title={`Fast mode ${chatSettings.fastMode ? 'on' : 'off'} · 1.5× speed · 2.5× credit usage`}
+                      on:click={() => updateChatSettings({ fastMode: !chatSettings.fastMode })}
+                    >
+                      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m13.5 2-8 12h6l-1 8 8-12h-6l1-8Z" /></svg>
+                    </button>
+                  </div>
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
             <button
               class="send"
               class:stop={sending}
