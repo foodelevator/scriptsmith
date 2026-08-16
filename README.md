@@ -8,6 +8,24 @@ A ChatGPT account with Codex access is required. Use **Sign in** in the popup an
 
 Vibext uses the browser's User Scripts API. Chromium users may need to enable **Allow User Scripts** for Vibext on the extension's details page (or enable extension developer mode on older Chromium versions).
 
+## Importing and exporting scripts
+
+Use **Export** beside a script to download it as a portable `.vibext.json` file. Use **Import script** beside **Add script** to import one of these files. Imported scripts keep the origins declared in the file and are enabled immediately. If none of those origins match the current site, the script is still imported but will not appear in the current site's popup list.
+
+The version 1 file format is JSON:
+
+```json
+{
+  "vibext": { "version": 1 },
+  "name": "Example script",
+  "description": "What the script does",
+  "origins": ["https://example.com"],
+  "code": "console.log('Hello');"
+}
+```
+
+The file contains only portable script data. Vibext creates a new internal ID and timestamp when importing; enabled state is not exported.
+
 ## Development
 
 Install the project dependencies:

@@ -10,9 +10,23 @@ export interface PageScript {
   createdAt: number;
 }
 
+export const VIBEXT_SCRIPT_FILE_VERSION = 1;
+
+export interface VibextScriptFileV1 {
+  vibext: {
+    version: typeof VIBEXT_SCRIPT_FILE_VERSION;
+  };
+  name: string;
+  description: string;
+  origins: string[];
+  code: string;
+}
+
 export type PageScriptChanges = Partial<
   Pick<PageScript, 'origins' | 'name' | 'description' | 'code' | 'enabled'>
 >;
+
+type PageScriptInput = Pick<PageScript, 'origins' | 'name' | 'description' | 'code'>;
 
 const STORAGE_KEY = 'pageScripts';
 const REGISTRATION_PREFIX = 'vibext-';
@@ -28,6 +42,76 @@ function getUserScriptsApi(): UserScriptsApi {
     );
   }
   return api;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function importedOrigin(value: unknown, index: number): string {
+  if (typeof value !== 'string') {
+    throw new Error(`Origin ${index + 1} must be a string.`);
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`Origin ${index + 1} is not a valid URL.`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`Origin ${index + 1} must use HTTP or HTTPS.`);
+  }
+  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error(`Origin ${index + 1} must be a site origin without a path, query, or fragment.`);
+  }
+  return url.origin;
+}
+
+export function parseVibextScriptFile(source: string): PageScriptInput {
+  let value: unknown;
+  try {
+    value = JSON.parse(source);
+  } catch {
+    throw new Error('The selected file is not valid JSON.');
+  }
+  if (!isRecord(value) || !isRecord(value.vibext)) {
+    throw new Error('The selected file is not a Vibext script file.');
+  }
+  if (value.vibext.version !== VIBEXT_SCRIPT_FILE_VERSION) {
+    const version = value.vibext.version;
+    throw new Error(
+      typeof version === 'number'
+        ? `Vibext script file version ${version} is not supported.`
+        : 'The Vibext script file version is missing or invalid.',
+    );
+  }
+  if (typeof value.name !== 'string') throw new Error('The script name must be a string.');
+  if (typeof value.description !== 'string') {
+    throw new Error('The script description must be a string.');
+  }
+  if (typeof value.code !== 'string') throw new Error('The script code must be a string.');
+  if (!Array.isArray(value.origins) || value.origins.length === 0) {
+    throw new Error('The script must include at least one origin.');
+  }
+
+  return {
+    name: value.name,
+    description: value.description,
+    code: value.code,
+    origins: [...new Set(value.origins.map(importedOrigin))],
+  };
+}
+
+export function serializeVibextScriptFile(script: PageScript): string {
+  const payload: VibextScriptFileV1 = {
+    vibext: { version: VIBEXT_SCRIPT_FILE_VERSION },
+    name: script.name,
+    description: script.description,
+    origins: script.origins,
+    code: script.code,
+  };
+  return `${JSON.stringify(payload, null, 2)}\n`;
 }
 
 function normalizePageScript(value: unknown): PageScript | null {
@@ -127,7 +211,7 @@ export async function getPageScript(scriptId: string): Promise<PageScript | null
 }
 
 export async function addPageScript(
-  input: Pick<PageScript, 'origins' | 'name' | 'description' | 'code'>,
+  input: PageScriptInput,
 ): Promise<PageScript> {
   if (input.origins.length === 0) throw new Error('A script must have at least one origin.');
   const script: PageScript = {
@@ -146,6 +230,10 @@ export async function addPageScript(
     throw error;
   }
   return script;
+}
+
+export function importVibextScriptFile(source: string): Promise<PageScript> {
+  return addPageScript(parseVibextScriptFile(source));
 }
 
 export async function updatePageScript(script: PageScript, changes: PageScriptChanges): Promise<PageScript> {

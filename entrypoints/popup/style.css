@@ -178,7 +178,8 @@ header p {
   outline-offset: 2px;
 }
 
-.edit-script {
+.edit-script,
+.export-script {
   border: 0;
   border-radius: 7px;
   padding: 5px 8px;
@@ -189,7 +190,8 @@ header p {
   white-space: nowrap;
 }
 
-.edit-script:hover:not(:disabled) {
+.edit-script:hover:not(:disabled),
+.export-script:hover:not(:disabled) {
   color: var(--accent-text);
   background: var(--accent-subtle);
 }
@@ -225,6 +227,33 @@ header p {
 
 .add-script:hover:not(:disabled) {
   background: var(--accent-bg-hover);
+}
+
+.script-creation-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.script-creation-actions button {
+  flex: 1;
+}
+
+.import-script {
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  padding: 8px 15px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.import-script:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.script-file-input {
+  display: none;
 }
 
 .reload-notice {
