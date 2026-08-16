@@ -361,6 +361,9 @@
           scriptId: request.scriptId,
           tabId: request.tabId,
           messages: conversation,
+          // Unlike the rendered message list, this includes reasoning, tool
+          // calls, and tool outputs from turns stopped by the user.
+          history: transcript,
         },
         {
           onResponseStart() {

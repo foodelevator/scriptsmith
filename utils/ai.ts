@@ -36,6 +36,8 @@ export interface ScriptChatRequest {
   scriptId: string;
   tabId: number;
   messages: ChatMessage[];
+  /** Canonical Responses API history from earlier turns. */
+  history?: ChatTranscriptItem[];
 }
 
 export interface ScriptChatResponse {
@@ -750,11 +752,18 @@ export async function chatWithScript(
   throwIfAborted();
   if (!script) throw new Error('The script no longer exists.');
 
-  const input: ResponseInputItem[] = request.messages.map((message) => ({
-    role: message.role,
-    content: modelContent(message),
-  }));
-  callbacks.onTranscriptItems?.([input[input.length - 1]!]);
+  const newMessages = request.history
+    ? request.messages.slice(-1)
+    : request.messages;
+  const input: ResponseInputItem[] = [
+    ...(request.history ?? []),
+    ...newMessages.map((message) => ({
+      role: message.role,
+      content: modelContent(message),
+    })),
+  ];
+  const newInputItems = input.slice(request.history?.length ?? 0);
+  callbacks.onTranscriptItems?.(newInputItems);
 
   for (let turn = 0; turn < 256; turn += 1) {
     let editorOrigin: string | null = null;
@@ -801,34 +810,58 @@ export async function chatWithScript(
       return { message, script };
     }
 
-    for (const [callIndex, call] of calls.entries()) {
-      throwIfAborted();
-      const activityKey =
-        streamed.toolActivityKeys[callIndex] ?? responseItemKey(call) ?? call.call_id;
-      callbacks.onToolExecutionStart?.(activityKey);
-      let result: Record<string, unknown>;
-      try {
-        const used = await useTool(script, call, request.tabId);
-        script = used.script;
-        callbacks.onScriptChange?.(script);
-        result = used.output;
-      } catch (error) {
-        result = {
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
+    const settledCallIds = new Set<string>();
+    try {
+      for (const [callIndex, call] of calls.entries()) {
+        throwIfAborted();
+        const activityKey =
+          streamed.toolActivityKeys[callIndex] ?? responseItemKey(call) ?? call.call_id;
+        callbacks.onToolExecutionStart?.(activityKey);
+        let result: Record<string, unknown>;
+        try {
+          const used = await useTool(script, call, request.tabId);
+          script = used.script;
+          callbacks.onScriptChange?.(script);
+          result = used.output;
+        } catch (error) {
+          result = {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
 
-      const output = JSON.stringify(result);
-      const toolOutput = {
-        type: 'function_call_output',
-        call_id: call.call_id,
-        output,
-      };
-      callbacks.onTranscriptItems?.([toolOutput]);
-      callbacks.onToolResult?.(activityKey);
-      throwIfAborted();
-      input.push(toolOutput);
+        const toolOutput = {
+          type: 'function_call_output',
+          call_id: call.call_id,
+          output: JSON.stringify(result),
+        };
+        // Record the result before observing an abort. A completed tool may
+        // have changed browser state and must remain visible to the next turn.
+        input.push(toolOutput);
+        settledCallIds.add(call.call_id);
+        callbacks.onTranscriptItems?.([toolOutput]);
+        callbacks.onToolResult?.(activityKey);
+        throwIfAborted();
+      }
+    } catch (error) {
+      if (error instanceof ScriptChatAbortedError) {
+        // A Responses API function call must have a matching output in future
+        // stateless requests. Balance calls that the abort prevented from
+        // executing while retaining results from tools that did finish.
+        const cancelledOutputs = calls
+          .filter((call) => !settledCallIds.has(call.call_id))
+          .map((call) => ({
+            type: 'function_call_output',
+            call_id: call.call_id,
+            output: JSON.stringify({
+              ok: false,
+              error: 'Execution aborted by user.',
+            }),
+          }));
+        input.push(...cancelledOutputs);
+        callbacks.onTranscriptItems?.(cancelledOutputs);
+      }
+      throw error;
     }
   }
 
