@@ -1,5 +1,5 @@
-const START_SELECTION_MESSAGE = 'vibext:start-element-selection';
-const CANCEL_SELECTION_MESSAGE = 'vibext:cancel-element-selection';
+const START_SELECTION_MESSAGE = 'scriptsmith:start-element-selection';
+const CANCEL_SELECTION_MESSAGE = 'scriptsmith:cancel-element-selection';
 const MAX_SELECTED_HTML = 2_000;
 
 interface StartSelectionMessage {
@@ -80,7 +80,7 @@ function pickerOverlay(): {
   tooltip: HTMLElement;
 } {
   const host = document.createElement('div');
-  host.setAttribute('data-vibext-element-picker', '');
+  host.setAttribute('data-scriptsmith-element-picker', '');
   for (const [property, value] of Object.entries({
     position: 'fixed',
     inset: '0',
@@ -168,7 +168,7 @@ function startElementSelection(): Promise<Record<string, unknown>> {
       while (target.getRootNode() instanceof ShadowRoot) {
         target = (target.getRootNode() as ShadowRoot).host;
       }
-      return target.closest('[data-vibext-element-picker]') ? null : target;
+      return target.closest('[data-scriptsmith-element-picker]') ? null : target;
     };
 
     const hover = (event: Event): void => {

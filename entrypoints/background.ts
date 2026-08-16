@@ -15,11 +15,11 @@ export default defineBackground(() => {
 
   const sync = () => {
     void browser.userScripts?.configureWorld?.({ messaging: true }).catch((error) => {
-      console.warn('Vibext could not enable user-script messaging:', error);
+      console.warn('scriptsmith could not enable user-script messaging:', error);
     });
     void syncRegisteredScripts().catch((error) => {
       // Browsers can require the user to explicitly enable the User Scripts API.
-      console.warn('Vibext could not synchronize page scripts:', error);
+      console.warn('scriptsmith could not synchronize page scripts:', error);
     });
   };
 

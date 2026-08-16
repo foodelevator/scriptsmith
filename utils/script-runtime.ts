@@ -1,7 +1,7 @@
 export function scriptRuntimeCode(scriptId: string): string {
   return `(() => {
     const runtimeKey = ${JSON.stringify(scriptId)};
-    const runtimes = globalThis.__vibextRuntimes ??= {};
+    const runtimes = globalThis.__scriptsmithRuntimes ??= {};
     if (runtimes[runtimeKey]) return runtimes[runtimeKey];
     let values = {};
     let peers = [];
@@ -11,7 +11,7 @@ export function scriptRuntimeCode(scriptId: string): string {
     const connect = () => {
       if (port || !globalThis.chrome?.runtime?.connect) return;
       try {
-        port = chrome.runtime.connect({ name: 'vibext-script:' + ${JSON.stringify(scriptId)} });
+        port = chrome.runtime.connect({ name: 'scriptsmith-script:' + ${JSON.stringify(scriptId)} });
         port.onMessage.addListener((message) => {
           if (message?.type !== 'peers' || !Array.isArray(message.peers)) return;
           peers = message.peers;

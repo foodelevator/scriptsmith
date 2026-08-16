@@ -8,7 +8,7 @@ export default defineConfig({
     },
   },
   manifest: {
-    name: 'Vibext',
+    name: 'scriptsmith',
     description:
       'Prompt a chatbot to create and retain changes for web pages.',
     content_security_policy: {

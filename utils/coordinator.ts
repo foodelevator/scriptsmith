@@ -9,7 +9,7 @@ type UserScriptPort = Browser.runtime.Port;
 
 const peersByScript = new Map<string, Map<number, PeerRecord>>();
 const portsByScript = new Map<string, Set<UserScriptPort>>();
-const PORT_PREFIX = 'vibext-script:';
+const PORT_PREFIX = 'scriptsmith-script:';
 
 function broadcast(scriptId: string): void {
   const peers = [...(peersByScript.get(scriptId)?.values() ?? [])];

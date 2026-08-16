@@ -40,7 +40,7 @@
     element?: Pick<SelectedElementReference, 'selector' | 'label' | 'html'>;
   };
 
-  const CHAT_SETTINGS_STORAGE_KEY = 'vibext:chat-settings';
+  const CHAT_SETTINGS_STORAGE_KEY = 'scriptsmith:chat-settings';
   const modelOptions: { value: OpenAIModel; label: string }[] = [
     { value: 'gpt-5.6-luna', label: 'Luna' },
     { value: 'gpt-5.6-terra', label: 'Terra' },
@@ -125,7 +125,7 @@
   async function patchChat(patch: Partial<SidebarChatState>): Promise<void> {
     if (!request) return;
     await browser.runtime.sendMessage({
-      type: 'vibext:sidebar:patch-chat',
+      type: 'scriptsmith:sidebar:patch-chat',
       sessionId: request.sessionId,
       patch,
     });
@@ -281,7 +281,7 @@
   }
 
   function cancelElementSelection(tabId: number): void {
-    void sendPageMessage(tabId, { type: 'vibext:cancel-element-selection' })
+    void sendPageMessage(tabId, { type: 'scriptsmith:cancel-element-selection' })
       .catch(() => undefined);
   }
 
@@ -328,7 +328,7 @@
         tabId,
         response: await sendPageMessage(
           tabId,
-          { type: 'vibext:start-element-selection' },
+          { type: 'scriptsmith:start-element-selection' },
           true,
         ),
       })));
@@ -376,7 +376,7 @@
         selectedElement = null;
         request = null;
         script = null;
-        error = 'Choose Add script or Edit script from the Vibext popup.';
+        error = 'Choose Add script or Edit script from the scriptsmith popup.';
         return;
       }
 
@@ -478,7 +478,7 @@
     try {
       await patchChat({ draft: content, error: '' });
       await browser.runtime.sendMessage({
-        type: 'vibext:sidebar:start-chat',
+        type: 'scriptsmith:sidebar:start-chat',
         sessionId: request.sessionId,
         settings: { ...chatSettings },
       });
@@ -491,7 +491,7 @@
   async function stopSending(): Promise<void> {
     if (!request || !sending || stopping) return;
     await browser.runtime.sendMessage({
-      type: 'vibext:sidebar:stop-chat',
+      type: 'scriptsmith:sidebar:stop-chat',
       sessionId: request.sessionId,
     });
   }
@@ -500,7 +500,7 @@
     if (!request || sending || selectingElement) return;
     settingsOpen = false;
     await browser.runtime.sendMessage({
-      type: 'vibext:sidebar:clear-chat',
+      type: 'scriptsmith:sidebar:clear-chat',
       sessionId: request.sessionId,
     });
   }
@@ -820,7 +820,7 @@
       {/if}
       {#if applyStatus}<p class="apply-status" role="status">{applyStatus}</p>{/if}
       {#if !signedIn}
-        <p class="auth-required" role="status">Sign in with ChatGPT in the Vibext popup to start chatting.</p>
+        <p class="auth-required" role="status">Sign in with ChatGPT in the scriptsmith popup to start chatting.</p>
       {/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
       {#if selectedElement}

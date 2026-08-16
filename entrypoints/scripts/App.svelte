@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
-    downloadVibextScriptFile,
+    downloadScriptFile,
     getAllPageScripts,
-    importVibextScriptFile,
+    importScriptFile,
     reloadTabsForOrigins,
     removePageScript,
     setPageScriptEnabled,
@@ -99,7 +99,7 @@
     error = '';
     status = '';
     try {
-      downloadVibextScriptFile(script);
+      downloadScriptFile(script);
       status = `${script.name} exported.`;
     } catch (caught) {
       error = messageFor(caught);
@@ -120,7 +120,7 @@
     error = '';
     status = '';
     try {
-      const imported = await importVibextScriptFile(await file.text());
+      const imported = await importScriptFile(await file.text());
       replaceScript(imported);
       markAffected(imported.origins);
       status = `${imported.name} imported and enabled.`;
@@ -182,7 +182,7 @@
     <input
       bind:this={scriptFileInput}
       type="file"
-      accept=".vibext.json,application/json"
+      accept=".scriptsmith.json,application/json"
       on:change={(event) => {
         const file = event.currentTarget.files?.[0];
         event.currentTarget.value = '';
@@ -220,7 +220,7 @@
     {:else if scripts.length === 0}
       <div class="empty">
         <strong>No scripts yet</strong>
-        <p>Import a Vibext script file to add it here.</p>
+        <p>Import a scriptsmith script file to add it here.</p>
       </div>
     {:else}
       <ul class="script-list">

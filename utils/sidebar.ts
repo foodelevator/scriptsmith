@@ -54,11 +54,11 @@ export interface SidebarScriptRequest {
 }
 
 export type SidebarCoordinatorMessage =
-  | { type: 'vibext:sidebar:reconcile' }
-  | { type: 'vibext:sidebar:patch-chat'; sessionId: string; patch: Partial<SidebarChatState> }
-  | { type: 'vibext:sidebar:start-chat'; sessionId: string; settings: import('./ai').ChatSettings }
-  | { type: 'vibext:sidebar:stop-chat'; sessionId: string }
-  | { type: 'vibext:sidebar:clear-chat'; sessionId: string };
+  | { type: 'scriptsmith:sidebar:reconcile' }
+  | { type: 'scriptsmith:sidebar:patch-chat'; sessionId: string; patch: Partial<SidebarChatState> }
+  | { type: 'scriptsmith:sidebar:start-chat'; sessionId: string; settings: import('./ai').ChatSettings }
+  | { type: 'scriptsmith:sidebar:stop-chat'; sessionId: string }
+  | { type: 'scriptsmith:sidebar:clear-chat'; sessionId: string };
 
 export function sidebarRequestStorageKey(tabId: number): string {
   return `${SIDEBAR_REQUEST_STORAGE_PREFIX}${tabId}`;
@@ -242,7 +242,7 @@ export async function openScriptSidebar(
     [sidebarRequestStorageKey(tabId)]: assignment,
     [sidebarWindowRequestStorageKey(resolvedWindowId)]: assignment,
   });
-  void browser.runtime.sendMessage({ type: 'vibext:sidebar:reconcile' })
+  void browser.runtime.sendMessage({ type: 'scriptsmith:sidebar:reconcile' })
     .catch(() => undefined);
   await showScriptSidebar(tabId, resolvedWindowId);
 }

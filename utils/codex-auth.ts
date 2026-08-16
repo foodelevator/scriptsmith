@@ -1,6 +1,6 @@
 export const CODEX_REFRESH_TOKEN_STORAGE_KEY = 'codexRefreshToken';
 export const CODEX_LOGIN_STATE_STORAGE_KEY = 'codexLoginState';
-export const CODEX_LOGIN_ALARM = 'vibext-codex-login';
+export const CODEX_LOGIN_ALARM = 'scriptsmith-codex-login';
 
 const CODEX_ACCESS_TOKEN_STORAGE_KEY = 'codexAccessToken';
 const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';

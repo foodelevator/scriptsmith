@@ -145,7 +145,7 @@ export function reconcileSidebarSessions(): Promise<void> {
     .catch(() => undefined)
     .then(reconcileNow)
     .catch((error) => {
-      console.warn('Vibext could not reconcile sidebar sessions:', error);
+      console.warn('scriptsmith could not reconcile sidebar sessions:', error);
     });
   return reconciliation;
 }
@@ -368,13 +368,13 @@ export function startSidebarCoordinator(): void {
   });
   browser.runtime.onMessage.addListener((raw: unknown) => {
     const message = raw as Partial<SidebarCoordinatorMessage>;
-    if (message.type === 'vibext:sidebar:reconcile') {
+    if (message.type === 'scriptsmith:sidebar:reconcile') {
       return reconcileSidebarSessions();
     }
-    if (message.type === 'vibext:sidebar:patch-chat' && message.sessionId && message.patch) {
+    if (message.type === 'scriptsmith:sidebar:patch-chat' && message.sessionId && message.patch) {
       return mutateChat(message.sessionId, (state) => ({ ...state, ...message.patch }));
     }
-    if (message.type === 'vibext:sidebar:start-chat' && message.sessionId && message.settings) {
+    if (message.type === 'scriptsmith:sidebar:start-chat' && message.sessionId && message.settings) {
       if (!starting.has(message.sessionId) && !controllers.has(message.sessionId)) {
         starting.add(message.sessionId);
         const turn = startChat(message.sessionId, message.settings).finally(() => {
@@ -386,7 +386,7 @@ export function startSidebarCoordinator(): void {
       }
       return Promise.resolve({ ok: true });
     }
-    if (message.type === 'vibext:sidebar:stop-chat' && message.sessionId) {
+    if (message.type === 'scriptsmith:sidebar:stop-chat' && message.sessionId) {
       const controller = controllers.get(message.sessionId);
       if (controller) {
         void mutateChat(message.sessionId, (state) => ({ ...state, stopping: true }));
@@ -394,7 +394,7 @@ export function startSidebarCoordinator(): void {
       }
       return Promise.resolve({ ok: true });
     }
-    if (message.type === 'vibext:sidebar:clear-chat' && message.sessionId) {
+    if (message.type === 'scriptsmith:sidebar:clear-chat' && message.sessionId) {
       return mutateChat(message.sessionId, (state) => state.sending
         ? state
         : {

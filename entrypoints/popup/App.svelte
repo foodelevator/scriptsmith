@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    downloadVibextScriptFile,
+    downloadScriptFile,
     getScriptsForOrigin,
     originFromUrl,
     removePageScript,
@@ -265,7 +265,7 @@
     error = '';
     status = '';
     try {
-      downloadVibextScriptFile(script);
+      downloadScriptFile(script);
       status = `${script.name} exported.`;
     } catch (caught) {
       error = messageFor(caught);
@@ -320,7 +320,7 @@
     browser.storage.onChanged.addListener(listener);
     return () => {
       browser.storage.onChanged.removeListener(listener);
-      void browser.runtime.sendMessage({ type: 'vibext:sidebar:reconcile' })
+      void browser.runtime.sendMessage({ type: 'scriptsmith:sidebar:reconcile' })
         .catch(() => undefined);
     };
   });
@@ -328,7 +328,7 @@
 
 <main>
   <header>
-    <h1>Vibext</h1>
+    <h1>scriptsmith</h1>
     <p>{origin ?? 'Scripts for the current site'}</p>
   </header>
 

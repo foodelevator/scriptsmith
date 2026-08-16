@@ -128,7 +128,7 @@ async function fetchWithTimeout(
         Authorization: `Bearer ${credentials.accessToken}`,
         'chatgpt-account-id': credentials.accountId,
         'OpenAI-Beta': 'codex-1',
-        originator: 'vibext',
+        originator: 'scriptsmith',
         Accept: 'application/json',
       },
       signal: controller.signal,

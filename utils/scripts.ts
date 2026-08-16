@@ -10,11 +10,11 @@ export interface PageScript {
   createdAt: number;
 }
 
-export const VIBEXT_SCRIPT_FILE_VERSION = 1;
+export const SCRIPT_FILE_VERSION = 1;
 
-export interface VibextScriptFileV1 {
-  vibext: {
-    version: typeof VIBEXT_SCRIPT_FILE_VERSION;
+export interface ScriptFileV1 {
+  scriptsmith: {
+    version: typeof SCRIPT_FILE_VERSION;
   };
   name: string;
   description: string;
@@ -29,7 +29,7 @@ export type PageScriptChanges = Partial<
 type PageScriptInput = Pick<PageScript, 'origins' | 'name' | 'description' | 'code'>;
 
 const STORAGE_KEY = 'pageScripts';
-const REGISTRATION_PREFIX = 'vibext-';
+const REGISTRATION_PREFIX = 'scriptsmith-';
 
 type StoredScripts = Record<string, PageScript>;
 type UserScriptsApi = typeof browser.userScripts;
@@ -38,7 +38,7 @@ function getUserScriptsApi(): UserScriptsApi {
   const api = browser.userScripts;
   if (!api) {
     throw new Error(
-      'The User Scripts API is unavailable. Enable “Allow User Scripts” for Vibext in your browser’s extension settings.',
+      'The User Scripts API is unavailable. Enable “Allow User Scripts” for scriptsmith in your browser’s extension settings.',
     );
   }
   return api;
@@ -68,22 +68,22 @@ function importedOrigin(value: unknown, index: number): string {
   return url.origin;
 }
 
-export function parseVibextScriptFile(source: string): PageScriptInput {
+export function parseScriptFile(source: string): PageScriptInput {
   let value: unknown;
   try {
     value = JSON.parse(source);
   } catch {
     throw new Error('The selected file is not valid JSON.');
   }
-  if (!isRecord(value) || !isRecord(value.vibext)) {
-    throw new Error('The selected file is not a Vibext script file.');
+  if (!isRecord(value) || !isRecord(value.scriptsmith)) {
+    throw new Error('The selected file is not a scriptsmith script file.');
   }
-  if (value.vibext.version !== VIBEXT_SCRIPT_FILE_VERSION) {
-    const version = value.vibext.version;
+  if (value.scriptsmith.version !== SCRIPT_FILE_VERSION) {
+    const version = value.scriptsmith.version;
     throw new Error(
       typeof version === 'number'
-        ? `Vibext script file version ${version} is not supported.`
-        : 'The Vibext script file version is missing or invalid.',
+        ? `scriptsmith script file version ${version} is not supported.`
+        : 'The scriptsmith script file version is missing or invalid.',
     );
   }
   if (typeof value.name !== 'string') throw new Error('The script name must be a string.');
@@ -103,9 +103,9 @@ export function parseVibextScriptFile(source: string): PageScriptInput {
   };
 }
 
-export function serializeVibextScriptFile(script: PageScript): string {
-  const payload: VibextScriptFileV1 = {
-    vibext: { version: VIBEXT_SCRIPT_FILE_VERSION },
+export function serializeScriptFile(script: PageScript): string {
+  const payload: ScriptFileV1 = {
+    scriptsmith: { version: SCRIPT_FILE_VERSION },
     name: script.name,
     description: script.description,
     origins: script.origins,
@@ -114,7 +114,7 @@ export function serializeVibextScriptFile(script: PageScript): string {
   return `${JSON.stringify(payload, null, 2)}\n`;
 }
 
-export function vibextScriptFilename(name: string): string {
+export function scriptFilename(name: string): string {
   const stem = name
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -122,17 +122,17 @@ export function vibextScriptFilename(name: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 80) || 'script';
-  return `${stem}.vibext.json`;
+  return `${stem}.scriptsmith.json`;
 }
 
-export function downloadVibextScriptFile(script: PageScript): void {
-  const blob = new Blob([serializeVibextScriptFile(script)], {
+export function downloadScriptFile(script: PageScript): void {
+  const blob = new Blob([serializeScriptFile(script)], {
     type: 'application/json;charset=utf-8',
   });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = vibextScriptFilename(script.name);
+  link.download = scriptFilename(script.name);
   document.body.append(link);
   link.click();
   link.remove();
@@ -202,7 +202,7 @@ export function matchPattern(origin: string): string {
 
 function executableCode(script: PageScript): string {
   const origins = JSON.stringify(script.origins);
-  return `if (${origins}.includes(location.origin)) {\nconst vibext = ${scriptRuntimeCode(script.id)};\n${script.code}\n}`;
+  return `if (${origins}.includes(location.origin)) {\nconst scriptsmith = ${scriptRuntimeCode(script.id)};\n${script.code}\n}`;
 }
 
 function registrationFor(script: PageScript): Browser.userScripts.RegisteredUserScript {
@@ -257,8 +257,8 @@ export async function addPageScript(
   return script;
 }
 
-export function importVibextScriptFile(source: string): Promise<PageScript> {
-  return addPageScript(parseVibextScriptFile(source));
+export function importScriptFile(source: string): Promise<PageScript> {
+  return addPageScript(parseScriptFile(source));
 }
 
 export async function updatePageScript(script: PageScript, changes: PageScriptChanges): Promise<PageScript> {
@@ -387,7 +387,7 @@ export async function syncRegisteredScripts(): Promise<void> {
   const registered = await api.getScripts();
   const registeredIds = new Set(registered.map((script) => script.id));
   const staleIds = registered.map((script) => script.id)
-    .filter((id) => id.startsWith(REGISTRATION_PREFIX) && !expectedIds.has(id));
+    .filter((id) => !expectedIds.has(id));
   const missing = expected.filter((script) => !registeredIds.has(registrationId(script.id)));
   const existing = expected.filter((script) => registeredIds.has(registrationId(script.id)));
   if (staleIds.length > 0) await api.unregister({ ids: staleIds });
