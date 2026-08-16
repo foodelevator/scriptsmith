@@ -294,6 +294,7 @@
     draft = '';
     let assistantIndex: number | null = null;
     let receivedText = false;
+    let scriptEditedDuringTurn = false;
 
     function addActivity(activity: Activity): void {
       const last = messages[messages.length - 1];
@@ -398,7 +399,7 @@
               (origin) => !updatedScript.origins.includes(origin),
             );
             if (updatedScript.code !== codeBefore) {
-              scriptChanged = true;
+              scriptEditedDuringTurn = true;
               applyStatus = '';
             }
           },
@@ -427,7 +428,7 @@
       );
       script = result.script;
       if (result.script.code !== codeBefore) {
-        scriptChanged = true;
+        scriptEditedDuringTurn = true;
         applyStatus = '';
       }
       if (!receivedText) {
@@ -440,6 +441,7 @@
       // finishes. This is a safety net for aborted/malformed streams: once the
       // turn has ended, nothing from it should remain visually “running”.
       finishAllActivities();
+      if (scriptEditedDuringTurn) scriptChanged = true;
       if (chatController === controller) chatController = null;
       sending = false;
       stopping = false;
