@@ -120,16 +120,18 @@ header p {
 .multi-page { font-size: 11px; color: var(--text-muted); }
 
 .script-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: 30px 26px;
+  grid-template-rows: 26px 26px;
   align-items: center;
-  gap: 2px;
+  justify-items: center;
+  gap: 2px 4px;
 }
 
 .script-toggle {
   position: relative;
   display: inline-flex;
   align-items: center;
-  margin-right: 6px;
   cursor: pointer;
 }
 
@@ -180,14 +182,26 @@ header p {
 
 .edit-script,
 .export-script {
+  display: grid;
+  width: 26px;
+  height: 26px;
   border: 0;
   border-radius: 7px;
-  padding: 5px 8px;
-  color: var(--text-secondary);
+  padding: 0;
+  color: var(--text-muted);
   background: transparent;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
+  place-items: center;
+}
+
+.edit-script svg,
+.export-script svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .edit-script:hover:not(:disabled),
@@ -250,10 +264,6 @@ header p {
 
 .import-script:hover:not(:disabled) {
   background: var(--surface-2);
-}
-
-.script-file-input {
-  display: none;
 }
 
 .reload-notice {
