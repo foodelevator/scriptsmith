@@ -1,17 +1,32 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
+    addPageScript,
     downloadScriptFile,
     getAllPageScripts,
-    importScriptFile,
+    parseScriptFile,
     reloadTabsForOrigins,
     removePageScript,
     setPageScriptEnabled,
     type PageScript,
+    type PageScriptInput,
   } from '../../utils/scripts';
+  import { hasCodexSubscription } from '../../utils/codex-auth';
+  import {
+    MAX_REVIEWABLE_CODE_CHARS,
+    reviewScriptFile,
+    type ScriptReview,
+  } from '../../utils/script-review';
 
   let scripts: PageScript[] = [];
   let scriptFileInput: HTMLInputElement;
+  let trustDialog: HTMLDialogElement;
+  let pendingImport: PageScriptInput | null = null;
+  let review: ScriptReview | null = null;
+  let reviewError = '';
+  let reviewing = false;
+  let reviewAbort: AbortController | null = null;
+  let signedIn = false;
   let loading = true;
   let importing = false;
   let reloading = false;
@@ -19,6 +34,9 @@
   let pendingReloadOrigins: string[] = [];
   let error = '';
   let status = '';
+
+  $: reviewable =
+    pendingImport !== null && pendingImport.code.length <= MAX_REVIEWABLE_CODE_CHARS;
 
   function messageFor(caught: unknown): string {
     return caught instanceof Error ? caught.message : String(caught);
@@ -114,13 +132,54 @@
     scriptFileInput.click();
   }
 
-  async function importScript(file: File): Promise<void> {
+  async function openTrustPrompt(file: File): Promise<void> {
     if (busyScriptId !== null || importing || reloading) return;
+    try {
+      pendingImport = parseScriptFile(await file.text());
+      trustDialog.showModal();
+    } catch (caught) {
+      error = messageFor(caught);
+    }
+  }
+
+  function closeTrustPrompt(): void {
+    reviewAbort?.abort();
+    pendingImport = null;
+    review = null;
+    reviewError = '';
+    reviewing = false;
+  }
+
+  async function runReview(): Promise<void> {
+    if (pendingImport === null || reviewing) return;
+    reviewing = true;
+    review = null;
+    reviewError = '';
+    reviewAbort = new AbortController();
+    const requested = pendingImport;
+    try {
+      const result = await reviewScriptFile(requested, reviewAbort.signal);
+      if (pendingImport === requested) review = result;
+    } catch (caught) {
+      if (pendingImport === requested) reviewError = messageFor(caught);
+    } finally {
+      // A closed prompt has already cleared this state for its own request.
+      if (pendingImport === requested) {
+        reviewAbort = null;
+        reviewing = false;
+      }
+    }
+  }
+
+  async function confirmImport(): Promise<void> {
+    if (pendingImport === null || importing) return;
+    const input = pendingImport;
+    trustDialog.close();
     importing = true;
     error = '';
     status = '';
     try {
-      const imported = await importScriptFile(await file.text());
+      const imported = await addPageScript(input);
       replaceScript(imported);
       markAffected(imported.origins);
       status = `${imported.name} imported and enabled.`;
@@ -156,6 +215,7 @@
 
   onMount(() => {
     void loadScripts(true);
+    void hasCodexSubscription().then((value) => (signedIn = value));
     const listener = (
       changes: Record<string, Browser.storage.StorageChange>,
       areaName: string,
@@ -186,7 +246,7 @@
       on:change={(event) => {
         const file = event.currentTarget.files?.[0];
         event.currentTarget.value = '';
-        if (file) void importScript(file);
+        if (file) void openTrustPrompt(file);
       }}
     />
   </header>
@@ -279,3 +339,130 @@
     {/if}
   </section>
 </main>
+
+<dialog
+  class="trust"
+  bind:this={trustDialog}
+  aria-labelledby="trust-title"
+  on:close={closeTrustPrompt}
+>
+  {#if pendingImport}
+    <h2 id="trust-title">Only add “{pendingImport.name}” if you trust it</h2>
+    <p class="trust-lead">
+      A script is a small program. Once added, this one runs by itself every time
+      you visit:
+    </p>
+
+    <div class="sites trust-sites">
+      <ul>
+        {#each pendingImport.origins as origin}
+          <li><span>{origin}</span></li>
+        {/each}
+      </ul>
+    </div>
+
+    <div class="trust-block">
+      <h3>While you are on those sites it can</h3>
+      <ul class="trust-points">
+        <li>See and change everything on the page, including what you type in — messages, addresses, passwords, card numbers.</li>
+        <li>Do anything there that you could do yourself, since you are already signed in.</li>
+        <li>Send whatever it sees to whoever wrote it.</li>
+      </ul>
+      <p class="trust-note">
+        A script can hide what it really does, so nothing here can prove it is
+        harmless. Add it only if you trust whoever gave it to you.
+      </p>
+    </div>
+
+    {#if pendingImport.description}
+      <details>
+        <summary>What the author says it does</summary>
+        <p class="trust-description">{pendingImport.description}</p>
+      </details>
+    {/if}
+
+    <details>
+      <summary>Show the script's code</summary>
+      <pre>{pendingImport.code}</pre>
+    </details>
+
+    <div class="trust-check">
+      <div class="trust-check-head">
+        <div>
+          <strong>Not sure? Have ChatGPT read it</strong>
+          <p>
+            It explains the code in plain words and points out anything that looks
+            off. It can be fooled or miss things, so treat it as a second opinion,
+            not proof.
+          </p>
+        </div>
+        {#if signedIn && review === null && reviewable}
+          <button
+            class="secondary"
+            type="button"
+            on:click={() => void runReview()}
+            disabled={reviewing}
+          >{reviewing ? 'Reading…' : 'Check the code'}</button>
+        {/if}
+      </div>
+
+      {#if !reviewable}
+        <p class="trust-note">
+          This script is too long to check in one piece, and checking only part of
+          it would tell you nothing about the rest.
+        </p>
+      {:else if !signedIn}
+        <p class="trust-note">
+          Sign in with ChatGPT from the scriptsmith popup to use this check.
+        </p>
+      {:else if reviewing}
+        <p class="trust-note">Sending the script to ChatGPT. This can take a minute.</p>
+      {/if}
+
+      {#if reviewError}
+        <p class="message error" role="alert">{reviewError}</p>
+      {/if}
+
+      {#if review}
+        <div class="trust-review">
+          <p class="trust-summary">{review.summary}</p>
+          {#if review.matchesDescription === 'no'}
+            <p class="trust-verdict mismatch">
+              It does more than the description above says.
+            </p>
+          {:else if review.matchesDescription === 'unclear'}
+            <p class="trust-verdict">
+              It could not tell whether the code matches the description above.
+            </p>
+          {/if}
+
+          {#if review.concerns.length > 0}
+            <ul class="concerns">
+              {#each review.concerns as concern}
+                <li class:high={concern.severity === 'high'}>
+                  <strong>{concern.title}</strong>
+                  <span>{concern.detail}</span>
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <p class="trust-note">
+              It found nothing beyond what the description claims. That is not a
+              guarantee — the access listed above still applies.
+            </p>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <div class="trust-actions">
+      <button class="secondary" type="button" on:click={() => trustDialog.close()}>Cancel</button>
+      <button
+        class="primary"
+        type="button"
+        on:click={() => void confirmImport()}
+        disabled={importing}
+      >I trust this script — add it</button>
+    </div>
+  {/if}
+</dialog>

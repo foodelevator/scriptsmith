@@ -26,7 +26,7 @@ export type PageScriptChanges = Partial<
   Pick<PageScript, 'origins' | 'name' | 'description' | 'code' | 'enabled'>
 >;
 
-type PageScriptInput = Pick<PageScript, 'origins' | 'name' | 'description' | 'code'>;
+export type PageScriptInput = Pick<PageScript, 'origins' | 'name' | 'description' | 'code'>;
 
 const STORAGE_KEY = 'pageScripts';
 const REGISTRATION_PREFIX = 'scriptsmith-';
@@ -255,10 +255,6 @@ export async function addPageScript(
     throw error;
   }
   return script;
-}
-
-export function importScriptFile(source: string): Promise<PageScript> {
-  return addPageScript(parseScriptFile(source));
 }
 
 export async function updatePageScript(script: PageScript, changes: PageScriptChanges): Promise<PageScript> {
