@@ -1,7 +1,7 @@
 import {
-  CODEX_LOGIN_ALARM,
-  pollCodexLogin,
+  CODEX_LOGIN_MESSAGE,
   resumeCodexLogin,
+  startCodexLogin,
 } from '../utils/codex-auth';
 import { syncRegisteredScripts } from '../utils/scripts';
 import { startScriptCoordinator } from '../utils/coordinator';
@@ -10,6 +10,7 @@ import { startSidebarCoordinator } from '../utils/sidebar-coordinator';
 export default defineBackground(() => {
   startScriptCoordinator();
   startSidebarCoordinator();
+  const recoverCodexLogin = resumeCodexLogin();
   // Remove credentials saved by versions that used the separately billed API.
   void browser.storage.local.remove('openaiApiKey');
 
@@ -23,13 +24,21 @@ export default defineBackground(() => {
     });
   };
 
-  browser.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === CODEX_LOGIN_ALARM) void pollCodexLogin();
+  browser.runtime.onMessage.addListener((raw: unknown) => {
+    const message = raw as { type?: string };
+    if (message.type !== CODEX_LOGIN_MESSAGE) return undefined;
+    // Keeping this response open also keeps the MV3 service worker alive while
+    // the authentication tab is open.
+    return recoverCodexLogin
+      .then(() => startCodexLogin())
+      .then(() => ({ ok: true }))
+      .catch((caught: unknown) => ({
+        ok: false,
+        error: caught instanceof Error ? caught.message : String(caught),
+      }));
   });
   browser.runtime.onInstalled.addListener(sync);
   browser.runtime.onStartup.addListener(() => {
     sync();
-    void resumeCodexLogin();
   });
-  void resumeCodexLogin();
 });

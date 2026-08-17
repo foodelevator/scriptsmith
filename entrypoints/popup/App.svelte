@@ -9,13 +9,12 @@
   } from '../../utils/scripts';
   import { createDraftScript } from '../../utils/ai';
   import {
+    CODEX_LOGIN_MESSAGE,
     CODEX_LOGIN_STATE_STORAGE_KEY,
     CODEX_REFRESH_TOKEN_STORAGE_KEY,
-    cancelCodexLogin,
     getCodexLoginState,
     hasCodexSubscription,
     signOutCodex,
-    startCodexLogin,
     type CodexLoginState,
   } from '../../utils/codex-auth';
   import {
@@ -125,27 +124,17 @@
     loginState = null;
     signingIn = true;
     try {
-      loginState = await startCodexLogin();
+      const result = await browser.runtime.sendMessage({
+        type: CODEX_LOGIN_MESSAGE,
+      }) as { ok?: boolean; error?: string } | undefined;
+      if (!result?.ok) {
+        throw new Error(result?.error || 'Could not start ChatGPT sign-in.');
+      }
     } catch (caught) {
+      console.error('scriptsmith ChatGPT sign-in failed:', caught);
       signingIn = false;
       error = messageFor(caught);
     }
-  }
-
-  async function openSignInPage(): Promise<void> {
-    if (!loginState) return;
-    try {
-      await navigator.clipboard.writeText(loginState.userCode);
-    } catch {
-      // The code remains visible if clipboard access is unavailable.
-    }
-    await browser.tabs.create({ url: loginState.verificationUrl });
-  }
-
-  async function cancelSignIn(): Promise<void> {
-    await cancelCodexLogin();
-    signingIn = false;
-    loginState = null;
   }
 
   async function signOut(): Promise<void> {
@@ -308,7 +297,9 @@
           | undefined;
         loginState = next ?? null;
         signingIn = next?.status === 'pending';
-        if (next?.status === 'complete') {
+        if (next?.status === 'pending') {
+          error = '';
+        } else if (next?.status === 'complete') {
           signedIn = true;
           void loadUsage();
           status = 'Signed in with ChatGPT.';
@@ -473,17 +464,8 @@
         <button class="secondary" type="button" on:click={() => void signOut()}>Sign out</button>
       </div>
     {:else if signingIn && loginState}
-      <div class="device-login">
-        <p>Enter this one-time code on the OpenAI page:</p>
-        <strong>{loginState.userCode}</strong>
-        <div class="login-actions">
-          <button
-            class="secondary sign-in"
-            type="button"
-            on:click={() => void openSignInPage()}
-          >Copy code and sign in</button>
-          <button class="secondary" type="button" on:click={() => void cancelSignIn()}>Cancel</button>
-        </div>
+      <div class="oauth-login">
+        <p>Complete sign-in in the OpenAI window.</p>
       </div>
     {:else}
       <div class="account-row">

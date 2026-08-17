@@ -1,11 +1,11 @@
 export const CODEX_REFRESH_TOKEN_STORAGE_KEY = 'codexRefreshToken';
 export const CODEX_LOGIN_STATE_STORAGE_KEY = 'codexLoginState';
-export const CODEX_LOGIN_ALARM = 'scriptsmith-codex-login';
+export const CODEX_LOGIN_MESSAGE = 'scriptsmith:codex-login:start';
 
 const CODEX_ACCESS_TOKEN_STORAGE_KEY = 'codexAccessToken';
 const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const AUTH_BASE_URL = 'https://auth.openai.com';
-const DEVICE_CALLBACK_URL = `${AUTH_BASE_URL}/deviceauth/callback`;
+const LOGIN_CALLBACK_URL = 'http://localhost:1455/auth/callback';
 const LOGIN_TIMEOUT_MS = 15 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const JWT_AUTH_CLAIM = 'https://api.openai.com/auth';
@@ -13,24 +13,8 @@ const JWT_AUTH_CLAIM = 'https://api.openai.com/auth';
 export interface CodexLoginState {
   id: string;
   status: 'pending' | 'complete' | 'error';
-  userCode: string;
-  verificationUrl: string;
   startedAt: number;
-  intervalSeconds: number;
   error?: string;
-  deviceAuthId?: string;
-}
-
-interface DeviceCodeResponse {
-  device_auth_id?: string;
-  user_code?: string;
-  usercode?: string;
-  interval?: string | number;
-}
-
-interface DeviceTokenResponse {
-  authorization_code?: string;
-  code_verifier?: string;
 }
 
 interface OAuthTokenResponse {
@@ -50,7 +34,7 @@ type CachedCredentials = CodexCredentials & { expiresAt: number };
 
 let cachedCredentials: CachedCredentials | null = null;
 let refreshPromise: Promise<CodexCredentials> | null = null;
-let polling = false;
+let loginPromise: Promise<CodexLoginState> | null = null;
 
 function messageFor(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
@@ -236,56 +220,201 @@ async function isCurrentLogin(id: string): Promise<boolean> {
   return state?.id === id && state.status === 'pending';
 }
 
-function scheduleLoginPoll(intervalSeconds: number): void {
-  browser.alarms.create(CODEX_LOGIN_ALARM, {
-    when: Date.now() + Math.max(1, intervalSeconds) * 1000,
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function randomUrlSafe(byteLength: number): string {
+  return base64Url(crypto.getRandomValues(new Uint8Array(byteLength)));
+}
+
+async function pkceChallenge(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(verifier),
+  );
+  return base64Url(new Uint8Array(digest));
+}
+
+async function captureAuthorizationCallback(authorizationUrl: string): Promise<string> {
+  const expectedAuthorization = new URL(authorizationUrl);
+  const expectedCallback = new URL(LOGIN_CALLBACK_URL);
+
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let tabId: number | undefined;
+
+    const cleanup = () => {
+      browser.webNavigation.onBeforeNavigate.removeListener(onBeforeNavigate);
+      browser.tabs.onRemoved.removeListener(onTabRemoved);
+      clearTimeout(timeout);
+    };
+
+    const finish = (error?: unknown, callbackUrl?: string, closeTab = true) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (closeTab && tabId !== undefined) {
+        void browser.tabs.remove(tabId).catch(() => undefined);
+      }
+      if (error !== undefined) {
+        reject(error);
+      } else if (callbackUrl) {
+        resolve(callbackUrl);
+      } else {
+        reject(new Error('OpenAI did not return an authorization response.'));
+      }
+    };
+
+    const onBeforeNavigate = (details: Browser.webNavigation.WebNavigationBaseCallbackDetails) => {
+      if (details.frameId !== 0) return;
+      let navigation: URL;
+      try {
+        navigation = new URL(details.url);
+      } catch {
+        return;
+      }
+      if (tabId === undefined) {
+        const isAuthorizationStart =
+          navigation.origin === expectedAuthorization.origin
+          && navigation.pathname === expectedAuthorization.pathname
+          && navigation.searchParams.get('state')
+            === expectedAuthorization.searchParams.get('state');
+        if (!isAuthorizationStart) return;
+        tabId = details.tabId;
+      }
+      if (details.tabId !== tabId) return;
+      if (
+        navigation.origin === expectedCallback.origin
+        && navigation.pathname === expectedCallback.pathname
+      ) {
+        finish(undefined, navigation.toString());
+      }
+    };
+
+    const onTabRemoved = (removedTabId: number) => {
+      if (removedTabId === tabId) {
+        finish(new Error('ChatGPT sign-in was cancelled.'), undefined, false);
+      }
+    };
+
+    const timeout = setTimeout(() => {
+      finish(new Error('ChatGPT sign-in timed out.'));
+    }, LOGIN_TIMEOUT_MS);
+
+    browser.webNavigation.onBeforeNavigate.addListener(onBeforeNavigate);
+    browser.tabs.onRemoved.addListener(onTabRemoved);
+    void browser.tabs.create({ url: authorizationUrl, active: true })
+      .then((tab) => {
+        if (tab.id === undefined) {
+          finish(new Error('Could not open the ChatGPT sign-in tab.'));
+        } else if (tabId !== undefined && tabId !== tab.id) {
+          void browser.tabs.remove(tab.id).catch(() => undefined);
+          finish(new Error('Could not identify the ChatGPT sign-in tab.'));
+        } else {
+          tabId = tab.id;
+        }
+      })
+      .catch((error) => {
+        finish(error);
+      });
   });
 }
 
-export async function startCodexLogin(): Promise<CodexLoginState> {
+async function runCodexLogin(): Promise<CodexLoginState> {
   await cancelCodexLogin();
-  const response = await fetchWithTimeout(
-    `${AUTH_BASE_URL}/api/accounts/deviceauth/usercode`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: CODEX_CLIENT_ID }),
-    },
-  );
-  if (response.status === 404) {
-    throw new Error(
-      'Device-code sign-in is disabled. Enable it in your ChatGPT security settings and try again.',
-    );
-  }
-  if (!response.ok) {
-    throw await responseError(response, `Could not start ChatGPT sign-in (${response.status})`);
-  }
-
-  const body = (await response.json()) as DeviceCodeResponse;
-  const deviceAuthId = body.device_auth_id;
-  const userCode = body.user_code || body.usercode;
-  const parsedInterval = Number(body.interval ?? 5);
-  if (!deviceAuthId || !userCode) {
-    throw new Error('OpenAI returned an invalid device sign-in response.');
-  }
-
   const state: CodexLoginState = {
     id: crypto.randomUUID(),
     status: 'pending',
-    userCode,
-    verificationUrl: `${AUTH_BASE_URL}/codex/device`,
     startedAt: Date.now(),
-    intervalSeconds:
-      Number.isFinite(parsedInterval) && parsedInterval > 0 ? parsedInterval : 5,
-    deviceAuthId,
   };
   await setLoginState(state);
-  scheduleLoginPoll(state.intervalSeconds);
-  return state;
+
+  try {
+    const redirectUri = LOGIN_CALLBACK_URL;
+    const verifier = randomUrlSafe(32);
+    const challenge = await pkceChallenge(verifier);
+    const oauthState = randomUrlSafe(32);
+    const authorizationUrl = new URL(`${AUTH_BASE_URL}/oauth/authorize`);
+    authorizationUrl.search = new URLSearchParams({
+      response_type: 'code',
+      client_id: CODEX_CLIENT_ID,
+      redirect_uri: redirectUri,
+      scope: 'openid profile email offline_access',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      id_token_add_organizations: 'true',
+      codex_cli_simplified_flow: 'true',
+      state: oauthState,
+    }).toString();
+
+    const responseUrl = await captureAuthorizationCallback(authorizationUrl.toString());
+
+    const callback = new URL(responseUrl);
+    const callbackError = callback.searchParams.get('error_description')
+      || callback.searchParams.get('error');
+    if (callbackError) throw new Error(callbackError);
+    if (callback.searchParams.get('state') !== oauthState) {
+      throw new Error('OpenAI returned an invalid sign-in state.');
+    }
+    const code = callback.searchParams.get('code');
+    if (!code) throw new Error('OpenAI did not return an authorization code.');
+    if (!(await isCurrentLogin(state.id))) {
+      throw new Error('ChatGPT sign-in was cancelled.');
+    }
+
+    const tokens = await tokenRequest({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+      client_id: CODEX_CLIENT_ID,
+      code_verifier: verifier,
+    });
+    if (!tokens.refresh_token) throw new Error('OpenAI did not return a refresh token.');
+    if (!(await isCurrentLogin(state.id))) {
+      throw new Error('ChatGPT sign-in was cancelled.');
+    }
+
+    await saveRefreshToken(tokens.refresh_token);
+    if (tokens.access_token) {
+      await cacheCredentials({
+        accessToken: tokens.access_token,
+        accountId: accountIdFromToken(tokens.access_token),
+        expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+      });
+    }
+
+    const complete: CodexLoginState = { ...state, status: 'complete' };
+    await setLoginState(complete);
+    return complete;
+  } catch (error) {
+    console.error('scriptsmith ChatGPT sign-in failed:', error);
+    if (await isCurrentLogin(state.id)) {
+      await setLoginState({
+        ...state,
+        status: 'error',
+        error: messageFor(error),
+      });
+    }
+    throw error;
+  }
+}
+
+export function startCodexLogin(): Promise<CodexLoginState> {
+  if (!loginPromise) {
+    loginPromise = runCodexLogin().finally(() => {
+      loginPromise = null;
+    });
+  }
+  return loginPromise;
 }
 
 export async function cancelCodexLogin(): Promise<void> {
-  await browser.alarms.clear(CODEX_LOGIN_ALARM);
   await browser.storage.session.remove(CODEX_LOGIN_STATE_STORAGE_KEY);
 }
 
@@ -298,89 +427,13 @@ export async function signOutCodex(): Promise<void> {
   ]);
 }
 
-export async function pollCodexLogin(): Promise<void> {
-  if (polling) return;
-  polling = true;
-  let loginId: string | null = null;
-  try {
-    const state = await getCodexLoginState();
-    if (!state || state.status !== 'pending' || !state.deviceAuthId) return;
-    loginId = state.id;
-    if (Date.now() - state.startedAt >= LOGIN_TIMEOUT_MS) {
-      await setLoginState({ ...state, status: 'error', error: 'ChatGPT sign-in timed out.' });
-      return;
-    }
-
-    let response: Response;
-    try {
-      response = await fetchWithTimeout(
-        `${AUTH_BASE_URL}/api/accounts/deviceauth/token`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            device_auth_id: state.deviceAuthId,
-            user_code: state.userCode,
-          }),
-        },
-      );
-    } catch {
-      if (await isCurrentLogin(state.id)) scheduleLoginPoll(state.intervalSeconds);
-      return;
-    }
-
-    if (response.status === 403 || response.status === 404) {
-      if (await isCurrentLogin(state.id)) scheduleLoginPoll(state.intervalSeconds);
-      return;
-    }
-    if (!response.ok) {
-      throw await responseError(response, `ChatGPT sign-in failed (${response.status})`);
-    }
-
-    const code = (await response.json()) as DeviceTokenResponse;
-    if (!code.authorization_code || !code.code_verifier) {
-      throw new Error('OpenAI returned an invalid device authorization code.');
-    }
-    if (!(await isCurrentLogin(state.id))) return;
-    const tokens = await tokenRequest({
-      grant_type: 'authorization_code',
-      code: code.authorization_code,
-      redirect_uri: DEVICE_CALLBACK_URL,
-      client_id: CODEX_CLIENT_ID,
-      code_verifier: code.code_verifier,
-    });
-    if (!tokens.refresh_token) throw new Error('OpenAI did not return a refresh token.');
-    if (!(await isCurrentLogin(state.id))) return;
-    await saveRefreshToken(tokens.refresh_token);
-    if (tokens.access_token) {
-      await cacheCredentials({
-        accessToken: tokens.access_token,
-        accountId: accountIdFromToken(tokens.access_token),
-        expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-      });
-    }
-    await browser.alarms.clear(CODEX_LOGIN_ALARM);
-    await setLoginState({
-      ...state,
-      status: 'complete',
-      deviceAuthId: undefined,
-    });
-  } catch (error) {
-    const state = await getCodexLoginState();
-    if (state?.status === 'pending' && state.id === loginId) {
-      await setLoginState({
-        ...state,
-        status: 'error',
-        deviceAuthId: undefined,
-        error: messageFor(error),
-      });
-    }
-  } finally {
-    polling = false;
-  }
-}
-
 export async function resumeCodexLogin(): Promise<void> {
   const state = await getCodexLoginState();
-  if (state?.status === 'pending') scheduleLoginPoll(1);
+  if (state?.status === 'pending') {
+    await setLoginState({
+      ...state,
+      status: 'error',
+      error: 'ChatGPT sign-in was interrupted. Please try again.',
+    });
+  }
 }
