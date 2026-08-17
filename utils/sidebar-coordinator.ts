@@ -245,7 +245,6 @@ async function startChat(sessionId: string, settings: ChatSettings): Promise<voi
     ),
     userMessage,
   ];
-  let assistantIndex: number | null = null;
   let receivedText = false;
   let scriptEdited = false;
   const codeBefore = script.code;
@@ -381,8 +380,12 @@ async function startChat(sessionId: string, settings: ChatSettings): Promise<voi
       onTextDelta(delta) {
         receivedText = true;
         void mutateChat(sessionId, (state) => {
-          if (assistantIndex === null) {
-            assistantIndex = state.messages.length;
+          const last = state.messages[state.messages.length - 1];
+          // Anything appended since the previous delta — a tool activity row,
+          // an origin request — closes off that answer. Text that arrives
+          // afterwards starts its own message so the conversation reads in the
+          // order it happened instead of growing back above the tools.
+          if (last?.role !== 'assistant') {
             return {
               ...state,
               messages: [...state.messages, { role: 'assistant', content: delta }],
@@ -390,10 +393,10 @@ async function startChat(sessionId: string, settings: ChatSettings): Promise<voi
           }
           return {
             ...state,
-            messages: state.messages.map((message, index) =>
-              index === assistantIndex && message.role === 'assistant'
-                ? { ...message, content: `${message.content}${delta}` }
-                : message),
+            messages: [
+              ...state.messages.slice(0, -1),
+              { ...last, content: `${last.content}${delta}` },
+            ],
           };
         });
       },
