@@ -87,6 +87,12 @@ export interface ScriptChatCallbacks {
   onToolCallDone?(callId: string): void;
   onToolExecutionStart?(callId: string): void;
   onToolResult?(callId: string): void;
+  /**
+   * Asks the reader to allow an origin the agent wants to add. Resolves false
+   * when they decline; rejects with ScriptChatAbortedError if they stop the
+   * turn while the request is still open.
+   */
+  onOriginApproval?(callId: string, origin: string): Promise<boolean>;
   onScriptChange?(script: PageScript): void;
   onTranscriptItems?(items: ChatTranscriptItem[]): void;
   onContextUsage?(usage: ContextUsage): void;
@@ -196,7 +202,8 @@ const tools = [
   {
     type: 'function',
     name: 'add_origin',
-    description: 'Add an exact http(s) origin to the current script so it also runs on that site.',
+    description:
+      'Ask to add an exact http(s) origin to the current script so it also runs on that site. The user must approve the request before the origin is added, and may decline it.',
     parameters: {
       type: 'object',
       properties: { origin: { type: 'string' } },
@@ -449,6 +456,7 @@ async function useTool(
   script: PageScript,
   call: ToolCall,
   windowId: number,
+  approveOrigin: (origin: string) => Promise<boolean>,
 ): Promise<ToolResult> {
   const args = parseArguments(call);
 
@@ -483,6 +491,15 @@ async function useTool(
       const raw = requiredString(args, 'origin', 'add_origin');
       const origin = originFromUrl(raw);
       if (!origin || origin !== raw.replace(/\/$/, '')) throw new Error('Provide an exact http(s) origin.');
+      // Already granted, so nothing changes and there is nothing to ask about.
+      if (script.origins.includes(origin)) {
+        return { script, output: { ok: true, origins: script.origins } };
+      }
+      if (!(await approveOrigin(origin))) {
+        throw new Error(
+          `The user declined to add ${origin}. The script does not run there and pages on it cannot be evaluated. Do not call add_origin for ${origin} again unless the user asks for it.`,
+        );
+      }
       const updated = await addOriginToScript(script, origin);
       return { script: updated, output: { ok: true, origins: updated.origins } };
     }
@@ -864,11 +881,23 @@ export async function chatWithScript(
         callbacks.onToolExecutionStart?.(activityKey);
         let result: Record<string, unknown>;
         try {
-          const used = await useTool(script, call, request.windowId);
+          const used = await useTool(
+            script,
+            call,
+            request.windowId,
+            // Widening the script's reach is the reader's decision, so without
+            // a way to ask them the answer is no.
+            (origin) =>
+              callbacks.onOriginApproval?.(activityKey, origin) ??
+                Promise.resolve(false),
+          );
           script = used.script;
           callbacks.onScriptChange?.(script);
           result = used.output;
         } catch (error) {
+          // Stopping while a tool waits on the reader ends the turn; it is not
+          // a failure of the tool to report back to the model.
+          if (error instanceof ScriptChatAbortedError) throw error;
           result = {
             ok: false,
             error: error instanceof Error ? error.message : String(error),

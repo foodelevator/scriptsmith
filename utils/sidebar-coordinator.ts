@@ -14,6 +14,7 @@ import {
   sidebarRequestStorageKey,
   sidebarWindowRequestStorageKey,
   type SidebarActivity,
+  type SidebarApprovalStatus,
   type SidebarChatState,
   type SidebarCoordinatorMessage,
   type SidebarDisplayMessage,
@@ -24,7 +25,13 @@ import {
 const controllers = new Map<string, AbortController>();
 const starting = new Set<string>();
 const writes = new Map<string, Promise<unknown>>();
+/** Open origin requests, keyed `${sessionId}:${callId}`, awaiting an answer. */
+const approvals = new Map<string, (approved: boolean) => void>();
 let reconciliation = Promise.resolve();
+
+function approvalKey(sessionId: string, approvalId: string): string {
+  return `${sessionId}:${approvalId}`;
+}
 
 function messageFor(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
@@ -55,7 +62,7 @@ async function validSessions(): Promise<SidebarSession[]> {
       await patchSidebarChat(session.sessionId, {
         sending: false,
         stopping: false,
-        messages: finishAllActivities(session.chat.messages),
+        messages: denyPendingApprovals(finishAllActivities(session.chat.messages)),
       });
     }
   }));
@@ -162,6 +169,31 @@ function finishAllActivities(messages: SidebarDisplayMessage[]): SidebarDisplayM
     : message);
 }
 
+/**
+ * Closes out requests nothing is waiting on any more. An unanswered request
+ * never grants anything, so an interrupted turn leaves it declined rather than
+ * leaving live buttons behind.
+ */
+function denyPendingApprovals(
+  messages: SidebarDisplayMessage[],
+): SidebarDisplayMessage[] {
+  return messages.map((message) =>
+    message.role === 'approval' && message.status === 'pending'
+      ? { ...message, status: 'denied' as const }
+      : message);
+}
+
+function setApprovalStatus(
+  messages: SidebarDisplayMessage[],
+  id: string,
+  status: SidebarApprovalStatus,
+): SidebarDisplayMessage[] {
+  return messages.map((message) =>
+    message.role === 'approval' && message.id === id
+      ? { ...message, status }
+      : message);
+}
+
 function addActivity(
   messages: SidebarDisplayMessage[],
   activity: SidebarActivity,
@@ -208,7 +240,8 @@ async function startChat(sessionId: string, settings: ChatSettings): Promise<voi
   };
   const conversation: ChatMessage[] = [
     ...session.chat.messages.filter(
-      (message): message is ChatMessage => message.role !== 'activity',
+      (message): message is ChatMessage =>
+        message.role !== 'activity' && message.role !== 'approval',
     ),
     userMessage,
   ];
@@ -282,6 +315,56 @@ async function startChat(sessionId: string, settings: ChatSettings): Promise<voi
           messages: setActivityPending(state.messages, id, false),
         }));
       },
+      async onOriginApproval(id, origin) {
+        const key = approvalKey(sessionId, id);
+        await mutateChat(sessionId, (state) => ({
+          ...state,
+          messages: [
+            ...finishAllActivities(state.messages),
+            { role: 'approval', id, origin, status: 'pending' },
+          ],
+        }));
+
+        let approved: boolean;
+        // Detaches this request's abort listener once it is answered, so a turn
+        // with several requests does not pile them up on the same signal.
+        const waiting = new AbortController();
+        try {
+          approved = await new Promise<boolean>((resolve, reject) => {
+            approvals.set(key, resolve);
+            const stop = () => reject(new ScriptChatAbortedError());
+            if (controller.signal.aborted) stop();
+            else {
+              controller.signal.addEventListener('abort', stop, {
+                once: true,
+                signal: waiting.signal,
+              });
+            }
+          });
+        } catch (caught) {
+          // The turn ended before they answered, so nothing was granted. The
+          // record is settled here rather than in the finally below, which
+          // cannot tell an answer from an interruption.
+          await mutateChat(sessionId, (state) => ({
+            ...state,
+            messages: setApprovalStatus(state.messages, id, 'denied'),
+          }));
+          throw caught;
+        } finally {
+          waiting.abort();
+          approvals.delete(key);
+        }
+
+        await mutateChat(sessionId, (state) => ({
+          ...state,
+          messages: setApprovalStatus(
+            state.messages,
+            id,
+            approved ? 'approved' : 'denied',
+          ),
+        }));
+        return approved;
+      },
       onScriptChange(updated) {
         if (updated.code !== codeBefore) scriptEdited = true;
         void reconcileSidebarSessions();
@@ -329,7 +412,7 @@ async function startChat(sessionId: string, settings: ChatSettings): Promise<voi
   } finally {
     await mutateChat(sessionId, (state) => ({
       ...state,
-      messages: finishAllActivities(state.messages),
+      messages: denyPendingApprovals(finishAllActivities(state.messages)),
       sending: false,
       stopping: false,
       scriptChanged: state.scriptChanged || scriptEdited,
@@ -378,6 +461,17 @@ export function startSidebarCoordinator(): void {
         void mutateChat(message.sessionId, (state) => ({ ...state, stopping: true }));
         controller.abort();
       }
+      return Promise.resolve({ ok: true });
+    }
+    if (
+      message.type === 'scriptsmith:sidebar:resolve-approval' &&
+      message.sessionId &&
+      message.approvalId
+    ) {
+      // A missing resolver means the turn already moved on, so the click is
+      // simply dropped rather than answering something else.
+      approvals.get(approvalKey(message.sessionId, message.approvalId))
+        ?.(message.approved === true);
       return Promise.resolve({ ok: true });
     }
     if (message.type === 'scriptsmith:sidebar:clear-chat' && message.sessionId) {

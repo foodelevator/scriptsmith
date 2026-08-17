@@ -19,9 +19,25 @@ export interface SidebarActivity {
   pending: boolean;
 }
 
+export type SidebarApprovalStatus = 'pending' | 'approved' | 'denied';
+
+/**
+ * A request from the agent that only the reader can grant. Adding an origin
+ * both starts running the saved script there and opens that site's live tabs
+ * to the agent, so the decision is theirs rather than the model's.
+ */
+export interface SidebarApprovalMessage {
+  role: 'approval';
+  /** The tool call this answers. */
+  id: string;
+  origin: string;
+  status: SidebarApprovalStatus;
+}
+
 export type SidebarDisplayMessage =
   | ChatMessage
-  | { role: 'activity'; activities: SidebarActivity[] };
+  | { role: 'activity'; activities: SidebarActivity[] }
+  | SidebarApprovalMessage;
 
 export interface SidebarChatState {
   messages: SidebarDisplayMessage[];
@@ -57,7 +73,13 @@ export type SidebarCoordinatorMessage =
   | { type: 'scriptsmith:sidebar:patch-chat'; sessionId: string; patch: Partial<SidebarChatState> }
   | { type: 'scriptsmith:sidebar:start-chat'; sessionId: string; settings: import('./ai').ChatSettings }
   | { type: 'scriptsmith:sidebar:stop-chat'; sessionId: string }
-  | { type: 'scriptsmith:sidebar:clear-chat'; sessionId: string };
+  | { type: 'scriptsmith:sidebar:clear-chat'; sessionId: string }
+  | {
+      type: 'scriptsmith:sidebar:resolve-approval';
+      sessionId: string;
+      approvalId: string;
+      approved: boolean;
+    };
 
 export function sidebarRequestStorageKey(tabId: number): string {
   return `${SIDEBAR_REQUEST_STORAGE_PREFIX}${tabId}`;

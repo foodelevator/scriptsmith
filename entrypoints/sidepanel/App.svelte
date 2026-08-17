@@ -487,6 +487,21 @@
     }
   }
 
+  async function resolveApproval(
+    approvalId: string,
+    approved: boolean,
+  ): Promise<void> {
+    if (!request) return;
+    // The background records the answer and every panel picks it up from
+    // session storage, so there is nothing to update locally.
+    await browser.runtime.sendMessage({
+      type: 'scriptsmith:sidebar:resolve-approval',
+      sessionId: request.sessionId,
+      approvalId,
+      approved,
+    });
+  }
+
   async function stopSending(): Promise<void> {
     if (!request || !sending || stopping) return;
     await browser.runtime.sendMessage({
@@ -779,6 +794,36 @@
               </span>
             {/each}
           </div>
+        {:else if message.role === 'approval'}
+          {#if message.status === 'pending'}
+            <div class="approval" role="group" aria-labelledby="approval-{message.id}">
+              <h3 id="approval-{message.id}">Let this script run on a new site?</h3>
+              <p class="approval-origin"><code>{message.origin}</code></p>
+              <p class="approval-lead">The agent asked to add this site. If you allow it:</p>
+              <ul class="approval-points">
+                <li>The script runs by itself on every page of this site, every time you visit, until you remove the site.</li>
+                <li>There it can see and change anything you can, including what you type, and act as you while you are signed in.</li>
+                <li>The agent can read and change your open tabs on that site right now, and what it finds there is sent to ChatGPT.</li>
+              </ul>
+              <div class="approval-actions">
+                <button
+                  class="approval-deny"
+                  type="button"
+                  on:click={() => void resolveApproval(message.id, false)}
+                >Deny</button>
+                <button
+                  class="approval-allow"
+                  type="button"
+                  on:click={() => void resolveApproval(message.id, true)}
+                >Allow</button>
+              </div>
+            </div>
+          {:else}
+            <p class="approval-settled" class:denied={message.status === 'denied'}>
+              {message.status === 'approved' ? 'Allowed' : 'Declined'}
+              <code>{message.origin}</code>
+            </p>
+          {/if}
         {:else}
           <article class:assistant={message.role === 'assistant'} class:user={message.role === 'user'}>
             {#if message.role === 'user' && message.selectedElement}
