@@ -22,8 +22,10 @@
     type CodexUsage,
   } from '../../utils/codex-usage';
   import {
-    openScriptSidebar,
+    assignScriptSidebar,
+    beginSidebarOpen,
     prepareScriptSidebar,
+    showScriptSidebar,
   } from '../../utils/sidebar';
   import {
     isUserScriptsAvailable,
@@ -162,18 +164,21 @@
     }
   }
 
-  async function openEditor(script: PageScript): Promise<void> {
+  async function openEditor(
+    script: PageScript,
+    pending?: Promise<boolean> | null,
+  ): Promise<void> {
     if (tabId === null || working || openingManager) return;
+    // Firefox loses the click's gesture across an await, so the open has to
+    // start before the bookkeeping below.
+    const opened = pending ?? beginSidebarOpen();
     working = true;
     error = '';
     status = '';
 
     try {
-      await openScriptSidebar(
-        { scriptId: script.id },
-        tabId,
-        windowId,
-      );
+      await assignScriptSidebar({ scriptId: script.id }, tabId, windowId);
+      if (!(await opened)) await showScriptSidebar(tabId, windowId);
       window.close();
     } catch (caught) {
       error = messageFor(caught);
@@ -184,6 +189,7 @@
 
   async function addScript(): Promise<void> {
     if (!origin || working || openingManager) return;
+    const opened = beginSidebarOpen();
     working = true;
     error = '';
 
@@ -191,7 +197,7 @@
       const script = await createDraftScript(origin);
       scripts = [...scripts, script];
       working = false;
-      await openEditor(script);
+      await openEditor(script, opened);
     } catch (caught) {
       error = messageFor(caught);
       working = false;

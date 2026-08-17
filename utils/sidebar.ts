@@ -183,6 +183,22 @@ export async function prepareScriptSidebar(tabId: number): Promise<void> {
   });
 }
 
+/**
+ * Firefox only accepts `sidebarAction.open()` from a user input handler and
+ * drops the gesture across any `await`, so this has to run before the caller
+ * does any of its own work. Resolves to whether the sidebar opened; null where
+ * the API does not exist, leaving the open to `showScriptSidebar`.
+ */
+export function beginSidebarOpen(): Promise<boolean> | null {
+  const firefoxSidebar = (
+    browser as typeof browser & {
+      sidebarAction?: { open(): Promise<void> };
+    }
+  ).sidebarAction;
+  if (!firefoxSidebar?.open) return null;
+  return firefoxSidebar.open().then(() => true, () => false);
+}
+
 export async function showScriptSidebar(
   tabId: number,
   windowId?: number,
@@ -195,16 +211,6 @@ export async function showScriptSidebar(
     return;
   }
 
-  const firefoxSidebar = (
-    browser as typeof browser & {
-      sidebarAction?: { open(): Promise<void> };
-    }
-  ).sidebarAction;
-  if (firefoxSidebar?.open) {
-    await firefoxSidebar.open();
-    return;
-  }
-
   await browser.windows.create({
     url: browser.runtime.getURL(`/sidepanel.html?tabId=${tabId}`),
     type: 'popup',
@@ -214,7 +220,8 @@ export async function showScriptSidebar(
   });
 }
 
-export async function openScriptSidebar(
+/** Binds a script to the sidebar for this tab and window. Does not open it. */
+export async function assignScriptSidebar(
   request: { scriptId: string },
   tabId: number,
   windowId?: number,
@@ -235,8 +242,8 @@ export async function openScriptSidebar(
     inScope: true,
   };
 
-  // Commit the request before opening. A newly-created panel reads this key on
-  // mount; opening concurrently caused it to briefly render the empty state.
+  // A panel reads this key on mount and re-reads it on change, so a panel that
+  // opened first still picks the script up here.
   await browser.storage.session.set({
     [SIDEBAR_REQUEST_STORAGE_KEY]: assignment,
     [sidebarRequestStorageKey(tabId)]: assignment,
@@ -244,5 +251,4 @@ export async function openScriptSidebar(
   });
   void browser.runtime.sendMessage({ type: 'scriptsmith:sidebar:reconcile' })
     .catch(() => undefined);
-  await showScriptSidebar(tabId, resolvedWindowId);
 }
