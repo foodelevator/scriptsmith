@@ -50,7 +50,6 @@ export interface SidebarScriptRequest {
   scriptId: string;
   windowId: number;
   nonce: string;
-  inScope: boolean;
 }
 
 export type SidebarCoordinatorMessage =
@@ -239,7 +238,6 @@ export async function assignScriptSidebar(
     scriptId: session.scriptId,
     windowId: session.windowId,
     nonce: session.nonce,
-    inScope: true,
   };
 
   // A panel reads this key on mount and re-reads it on change, so a panel that

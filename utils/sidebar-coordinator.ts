@@ -30,19 +30,13 @@ function messageFor(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
 }
 
-function assignmentFor(session: SidebarSession, inScope: boolean): SidebarScriptRequest {
+function assignmentFor(session: SidebarSession): SidebarScriptRequest {
   return {
     sessionId: session.sessionId,
     scriptId: session.scriptId,
     windowId: session.windowId,
     nonce: session.nonce,
-    inScope,
   };
-}
-
-function newest(sessions: SidebarSession[]): SidebarSession | undefined {
-  return [...sessions].sort((a, b) =>
-    b.createdAt - a.createdAt || b.sessionId.localeCompare(a.sessionId))[0];
 }
 
 async function validSessions(): Promise<SidebarSession[]> {
@@ -90,7 +84,7 @@ async function reconcileNow(): Promise<void> {
       session.scriptId === request.scriptId &&
       session.windowId === tab.windowId
     ) {
-      requests.set(tab.id, assignmentFor(session, true));
+      requests.set(tab.id, assignmentFor(session));
     } else if (request) {
       invalidRequestKeys.push(key);
     }
@@ -99,8 +93,9 @@ async function reconcileNow(): Promise<void> {
     await browser.storage.session.remove(invalidRequestKeys);
   }
 
-  // Firefox has one physical sidebar per window. Follow the active tab's
-  // explicit binding when possible; otherwise leave the sidebar out of scope.
+  // Firefox has one physical sidebar per window, so it follows the active tab's
+  // explicit binding. A tab without one leaves the key unset; the panel then
+  // renders its empty state rather than some other tab's editor.
   await Promise.all(tabs.filter((tab) => tab.active).map(async (active) => {
     const key = sidebarWindowRequestStorageKey(active.windowId);
     const request = active.id === undefined ? undefined : requests.get(active.id);
@@ -108,16 +103,7 @@ async function reconcileNow(): Promise<void> {
       await browser.storage.session.set({ [key]: request });
       return;
     }
-    const fallback = newest(
-      sessions.filter((session) => session.windowId === active.windowId),
-    );
-    if (!fallback) {
-      await browser.storage.session.remove(key);
-      return;
-    }
-    await browser.storage.session.set({
-      [key]: assignmentFor(fallback, false),
-    });
+    await browser.storage.session.remove(key);
   }));
 
   if (sidePanel?.setOptions) {
@@ -137,7 +123,7 @@ async function reconcileNow(): Promise<void> {
   }
 
   // Firefox cannot make its window sidebar truly tab-scoped, so unbound tabs
-  // render the out-of-scope state rather than closing it irreversibly.
+  // render the empty state rather than closing it irreversibly.
 }
 
 export function reconcileSidebarSessions(): Promise<void> {

@@ -291,7 +291,7 @@
   }
 
   async function toggleElementSelection(): Promise<void> {
-    if (!request || !script || !request.inScope) return;
+    if (!request || !script) return;
 
     if (selectingElement) {
       selectionRequestId += 1;
@@ -376,7 +376,6 @@
         selectedElement = null;
         request = null;
         script = null;
-        error = 'Choose Add script or Edit script from the scriptsmith popup.';
         return;
       }
 
@@ -651,7 +650,7 @@
     <div>
       <div class="header-title-row">
         <h1>{script?.name ?? 'Script editor'}</h1>
-        {#if script && request?.inScope}
+        {#if script}
           <button
             class="clear-conversation"
             type="button"
@@ -664,7 +663,7 @@
           </button>
         {/if}
       </div>
-      {#if script && request?.inScope}
+      {#if script}
         <p>{script.description}</p>
         <div class="origin-chips" aria-label="Script sites">
           {#each script.origins as origin}
@@ -737,8 +736,11 @@
 
   {#if loading}
     <div class="state">Loading script…</div>
-  {:else if request && !request.inScope}
-    <div class="state">This script does not run on the active tab. Switch to one of its sites to continue editing.</div>
+  {:else if !request}
+    <div class="state">
+      <p>No script is being edited on this tab.</p>
+      <p>Open the scriptsmith popup on a site you want to change and choose Add script or Edit script.</p>
+    </div>
   {:else if script}
     <section class="conversation" bind:this={messagesElement} aria-live="polite">
       {#if messages.length === 0}

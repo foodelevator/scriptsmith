@@ -966,6 +966,14 @@ textarea::placeholder {
   text-align: center;
 }
 
+.state p {
+  margin: 0;
+}
+
+.state p + p {
+  margin-top: 8px;
+}
+
 .error {
   color: var(--danger-text);
 }
