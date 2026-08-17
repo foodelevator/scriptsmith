@@ -25,6 +25,11 @@
     openScriptSidebar,
     prepareScriptSidebar,
   } from '../../utils/sidebar';
+  import {
+    isUserScriptsAvailable,
+    restoreUserScripts,
+  } from '../../utils/user-scripts';
+  import UserScriptsSetup from '../../components/UserScriptsSetup.svelte';
 
   let scripts: PageScript[] = [];
   let origin: string | null = null;
@@ -44,6 +49,9 @@
   let usageError = '';
   let status = '';
   let error = '';
+  let userScriptsReady = isUserScriptsAvailable();
+
+  const NEEDS_USER_SCRIPTS = 'Allow User Scripts first — see the notice above.';
 
   function messageFor(caught: unknown): string {
     return caught instanceof Error ? caught.message : String(caught);
@@ -85,6 +93,7 @@
   async function loadPage(): Promise<void> {
     loading = true;
     error = '';
+    userScriptsReady = isUserScriptsAvailable();
 
     try {
       const [tab, nextSignedIn, nextLoginState] = await Promise.all([
@@ -278,8 +287,26 @@
     }
   }
 
+  function userScriptsEnabled(): void {
+    userScriptsReady = true;
+    void loadPage();
+  }
+
+  async function recheckUserScripts(): Promise<void> {
+    const available = isUserScriptsAvailable();
+    if (available === userScriptsReady) return;
+    if (!available) {
+      userScriptsReady = false;
+      return;
+    }
+    await restoreUserScripts();
+    userScriptsEnabled();
+  }
+
   onMount(() => {
     void loadPage();
+    const onFocus = () => void recheckUserScripts();
+    window.addEventListener('focus', onFocus);
     const listener = (
       changes: Record<string, Browser.storage.StorageChange>,
       areaName: string,
@@ -310,6 +337,7 @@
     };
     browser.storage.onChanged.addListener(listener);
     return () => {
+      window.removeEventListener('focus', onFocus);
       browser.storage.onChanged.removeListener(listener);
       void browser.runtime.sendMessage({ type: 'scriptsmith:sidebar:reconcile' })
         .catch(() => undefined);
@@ -322,6 +350,10 @@
     <h1>scriptsmith</h1>
     <p>{origin ?? 'Scripts for the current site'}</p>
   </header>
+
+  {#if !userScriptsReady}
+    <UserScriptsSetup compact onAvailable={userScriptsEnabled} />
+  {/if}
 
   <section aria-labelledby="scripts-heading">
     <div class="section-heading">
@@ -345,13 +377,18 @@
               {/if}
             </div>
             <div class="script-actions">
-              <label class="script-toggle" title={`${script.enabled ? 'Disable' : 'Enable'} ${script.name}`}>
+              <label
+                class="script-toggle"
+                title={userScriptsReady
+                  ? `${script.enabled ? 'Disable' : 'Enable'} ${script.name}`
+                  : NEEDS_USER_SCRIPTS}
+              >
                 <input
                   type="checkbox"
                   role="switch"
                   checked={script.enabled}
                   aria-label={`${script.enabled ? 'Disable' : 'Enable'} ${script.name}`}
-                  disabled={working || openingManager || togglingScriptId !== null}
+                  disabled={!userScriptsReady || working || openingManager || togglingScriptId !== null}
                   on:change={(event) => void toggleScript(script, event.currentTarget.checked)}
                 />
                 <span class="toggle-track" aria-hidden="true"><span></span></span>
@@ -380,9 +417,9 @@
                 class="edit-script"
                 type="button"
                 aria-label={`Edit ${script.name}`}
-                title={`Edit ${script.name}`}
+                title={userScriptsReady ? `Edit ${script.name}` : NEEDS_USER_SCRIPTS}
                 on:click={() => void openEditor(script)}
-                disabled={working || openingManager || togglingScriptId !== null}
+                disabled={!userScriptsReady || working || openingManager || togglingScriptId !== null}
               >
                 <svg aria-hidden="true" viewBox="0 0 20 20">
                   <path d="m4 16 3.2-.7 8-8a1.8 1.8 0 0 0-2.5-2.5l-8 8L4 16Z" />
@@ -411,8 +448,9 @@
     <button
       class="add-script"
       type="button"
+      title={userScriptsReady ? undefined : NEEDS_USER_SCRIPTS}
       on:click={() => void addScript()}
-      disabled={!origin || tabId === null || working || openingManager || togglingScriptId !== null}
+      disabled={!userScriptsReady || !origin || tabId === null || working || openingManager || togglingScriptId !== null}
     >{working ? 'Opening…' : 'Add script'}</button>
     <button
       class="manage-scripts"

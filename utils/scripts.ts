@@ -1,4 +1,8 @@
 import { scriptRuntimeCode } from './script-runtime';
+import {
+  isUserScriptsAvailable,
+  userScriptsApi as getUserScriptsApi,
+} from './user-scripts';
 
 export interface PageScript {
   id: string;
@@ -32,17 +36,6 @@ const STORAGE_KEY = 'pageScripts';
 const REGISTRATION_PREFIX = 'scriptsmith-';
 
 type StoredScripts = Record<string, PageScript>;
-type UserScriptsApi = typeof browser.userScripts;
-
-function getUserScriptsApi(): UserScriptsApi {
-  const api = browser.userScripts;
-  if (!api) {
-    throw new Error(
-      'The User Scripts API is unavailable. Enable “Allow User Scripts” for scriptsmith in your browser’s extension settings.',
-    );
-  }
-  return api;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -369,8 +362,11 @@ export async function runPageScriptNow(
 }
 
 export async function removePageScript(script: PageScript): Promise<void> {
-  const api = getUserScriptsApi();
-  if (script.enabled) await api.unregister({ ids: [registrationId(script.id)] });
+  // Nothing is registered while the API is unavailable, so there is nothing to
+  // unregister and removal only has to touch storage.
+  if (script.enabled && isUserScriptsAvailable()) {
+    await getUserScriptsApi().unregister({ ids: [registrationId(script.id)] });
+  }
   const stored = await readAllScripts();
   delete stored[script.id];
   await writeAllScripts(stored);

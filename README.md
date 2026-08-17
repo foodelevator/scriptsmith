@@ -6,7 +6,15 @@ The extension is built with WXT, Svelte, and TypeScript. Scripts can target one 
 
 A ChatGPT account with Codex access is required. Use **Sign in** in the popup and complete OpenAI's browser authorization flow. The extension uses OAuth authorization code flow with PKCE and captures Codex's localhost callback from the sign-in tab. The Codex refresh token is stored in extension-local browser storage and used only to obtain access tokens for Codex requests. The agent currently uses `gpt-5.6-sol` through the user's Codex subscription.
 
-scriptsmith uses the browser's User Scripts API. Chromium users may need to enable **Allow User Scripts** for scriptsmith on the extension's details page (or enable extension developer mode on older Chromium versions).
+## Before your first script
+
+scriptsmith runs its scripts through the browser's User Scripts API, which browsers keep switched off until you allow it. Until then the popup and the manager page show a setup card in place of the usual actions, with a button that takes you to the right page and a **Check again** button to confirm once you are done.
+
+On Chromium, open the extension's details page (the card's **Open extension settings** button goes straight there, or paste `chrome://extensions/?id=<extension id>` into the address bar), then switch on **Allow User Scripts**. Chrome 138 or later is required for that switch.
+
+On Firefox, the card's **Allow scriptsmith to run scripts** button raises Firefox's own permission prompt. If you dismiss it, open `about:addons`, click **scriptsmith**, open the **Permissions** tab, and switch on **Run user scripts**. Firefox 136 or later is required.
+
+Saved scripts survive the switch being turned off — they simply stop running, and scriptsmith registers them again as soon as it is allowed back in.
 
 ## Importing and exporting scripts
 
@@ -49,5 +57,7 @@ Or start a Firefox development build:
 ```sh
 npm run dev:firefox
 ```
+
+The Firefox scripts pass `--mv3`. Manifest V3 is required there because Firefox only exposes the User Scripts API used here under MV3, and only as an optional permission the extension requests at runtime.
 
 Create a production build with `npm run build` or `npm run build:firefox`.

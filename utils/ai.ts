@@ -11,6 +11,7 @@ import {
   updatePageScript,
   type PageScript,
 } from './scripts';
+import { userScriptsApi } from './user-scripts';
 
 export type OpenAIModel =
   | 'gpt-5.6-luna'
@@ -373,7 +374,7 @@ async function evaluateScript(
   target: { tabId: number; frameId: number; origin: string },
   code: string,
 ): Promise<Record<string, unknown>> {
-  const results = await browser.userScripts.execute({
+  const results = await userScriptsApi().execute({
     target: { tabId: target.tabId, frameIds: [target.frameId] },
     js: [{ code: `(async () => {\n${code}\n})()` }],
   });

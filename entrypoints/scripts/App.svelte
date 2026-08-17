@@ -17,6 +17,11 @@
     reviewScriptFile,
     type ScriptReview,
   } from '../../utils/script-review';
+  import {
+    isUserScriptsAvailable,
+    restoreUserScripts,
+  } from '../../utils/user-scripts';
+  import UserScriptsSetup from '../../components/UserScriptsSetup.svelte';
 
   let scripts: PageScript[] = [];
   let scriptFileInput: HTMLInputElement;
@@ -34,6 +39,9 @@
   let pendingReloadOrigins: string[] = [];
   let error = '';
   let status = '';
+  let userScriptsReady = isUserScriptsAvailable();
+
+  const NEEDS_USER_SCRIPTS = 'Allow User Scripts first — see the notice above.';
 
   $: reviewable =
     pendingImport !== null && pendingImport.code.length <= MAX_REVIEWABLE_CODE_CHARS;
@@ -213,9 +221,29 @@
     }
   }
 
+  function userScriptsEnabled(): void {
+    userScriptsReady = true;
+    void loadScripts();
+  }
+
+  async function recheckUserScripts(): Promise<void> {
+    const available = isUserScriptsAvailable();
+    if (available === userScriptsReady) return;
+    if (!available) {
+      userScriptsReady = false;
+      return;
+    }
+    await restoreUserScripts();
+    userScriptsEnabled();
+  }
+
   onMount(() => {
     void loadScripts(true);
     void hasCodexSubscription().then((value) => (signedIn = value));
+    // The user leaves this tab to flip the browser's switch and comes back.
+    const onFocus = () => void recheckUserScripts();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
     const listener = (
       changes: Record<string, Browser.storage.StorageChange>,
       areaName: string,
@@ -223,7 +251,11 @@
       if (areaName === 'local' && changes.pageScripts) void loadScripts();
     };
     browser.storage.onChanged.addListener(listener);
-    return () => browser.storage.onChanged.removeListener(listener);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+      browser.storage.onChanged.removeListener(listener);
+    };
   });
 </script>
 
@@ -236,8 +268,9 @@
     <button
       class="primary import-button"
       type="button"
+      title={userScriptsReady ? undefined : NEEDS_USER_SCRIPTS}
       on:click={chooseScriptFile}
-      disabled={importing || reloading || busyScriptId !== null}
+      disabled={!userScriptsReady || importing || reloading || busyScriptId !== null}
     >{importing ? 'Importing…' : 'Import script'}</button>
     <input
       bind:this={scriptFileInput}
@@ -250,6 +283,10 @@
       }}
     />
   </header>
+
+  {#if !userScriptsReady}
+    <UserScriptsSetup onAvailable={userScriptsEnabled} />
+  {/if}
 
   {#if pendingReloadOrigins.length > 0}
     <section class="reload-notice" role="status" aria-label="Reload affected tabs">
@@ -309,13 +346,18 @@
             </div>
 
             <div class="script-actions">
-              <label class="script-toggle" title={`${script.enabled ? 'Disable' : 'Enable'} ${script.name} on all sites`}>
+              <label
+                class="script-toggle"
+                title={userScriptsReady
+                  ? `${script.enabled ? 'Disable' : 'Enable'} ${script.name} on all sites`
+                  : NEEDS_USER_SCRIPTS}
+              >
                 <input
                   type="checkbox"
                   role="switch"
                   checked={script.enabled}
                   aria-label={`${script.enabled ? 'Disable' : 'Enable'} ${script.name} on all sites`}
-                  disabled={busyScriptId !== null || importing || reloading}
+                  disabled={!userScriptsReady || busyScriptId !== null || importing || reloading}
                   on:change={(event) => void toggleScript(script, event.currentTarget.checked)}
                 />
                 <span class="toggle-track" aria-hidden="true"><span></span></span>
