@@ -1,6 +1,13 @@
 import { DEFAULT_OPENAI_MODEL } from './ai';
-import { getCodexCredentials, invalidateCodexAccessToken } from './codex-auth';
+import {
+  getCodexCredentials,
+  invalidateCodexAccessToken,
+  trackCodexRequest,
+} from './codex-auth';
 import type { PageScriptInput } from './scripts';
+
+export const CODEX_REVIEW_MESSAGE = 'scriptsmith:codex-review:start';
+export const CODEX_REVIEW_CANCEL_MESSAGE = 'scriptsmith:codex-review:cancel';
 
 const REVIEW_TIMEOUT_MS = 3 * 60_000;
 const REVIEW_EFFORT = 'high';
@@ -197,6 +204,7 @@ export async function reviewScriptFile(
   }
 
   const controller = new AbortController();
+  const stopTracking = trackCodexRequest(controller);
   let timedOut = false;
   const abort = () => controller.abort();
   const timeout = setTimeout(() => {
@@ -235,7 +243,7 @@ export async function reviewScriptFile(
       );
 
       if (response.status === 401 && attempt === 0) {
-        invalidateCodexAccessToken();
+        await invalidateCodexAccessToken();
         continue;
       }
       if (!response.ok) {
@@ -257,7 +265,38 @@ export async function reviewScriptFile(
     }
     throw error;
   } finally {
+    stopTracking();
     clearTimeout(timeout);
     signal?.removeEventListener('abort', abort);
+  }
+}
+
+/** Runs a review in the background so extension pages never handle tokens. */
+export async function requestScriptReview(
+  input: PageScriptInput,
+  signal?: AbortSignal,
+): Promise<ScriptReview> {
+  const requestId = crypto.randomUUID();
+  const cancel = () => {
+    void browser.runtime.sendMessage({
+      type: CODEX_REVIEW_CANCEL_MESSAGE,
+      requestId,
+    }).catch(() => undefined);
+  };
+  if (signal?.aborted) throw new Error('The review was stopped.');
+  signal?.addEventListener('abort', cancel, { once: true });
+
+  try {
+    const result = await browser.runtime.sendMessage({
+      type: CODEX_REVIEW_MESSAGE,
+      requestId,
+      input,
+    }) as { ok?: boolean; review?: ScriptReview; error?: string } | undefined;
+    if (!result?.ok || !result.review) {
+      throw new Error(result?.error || 'ChatGPT could not review this script.');
+    }
+    return result.review;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
   }
 }

@@ -1,6 +1,7 @@
 import {
   getCodexCredentials,
   invalidateCodexAccessToken,
+  trackCodexRequest,
   type CodexCredentials,
 } from './codex-auth';
 
@@ -8,6 +9,8 @@ const USAGE_URLS = [
   'https://chatgpt.com/backend-api/wham/usage',
   'https://chatgpt.com/backend-api/codex/usage',
 ];
+export const CODEX_USAGE_MESSAGE = 'scriptsmith:codex-usage:get';
+
 const REQUEST_TIMEOUT_MS = 15_000;
 
 export interface CodexUsageWindow {
@@ -121,6 +124,7 @@ async function fetchWithTimeout(
   credentials: CodexCredentials,
 ): Promise<Response> {
   const controller = new AbortController();
+  const stopTracking = trackCodexRequest(controller);
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     return await fetch(url, {
@@ -137,6 +141,7 @@ async function fetchWithTimeout(
     if (controller.signal.aborted) throw new Error('Codex usage request timed out.');
     throw error;
   } finally {
+    stopTracking();
     clearTimeout(timeout);
   }
 }
@@ -150,7 +155,7 @@ export async function getCodexUsage(): Promise<CodexUsage> {
       const response = await fetchWithTimeout(url, credentials);
       if (response.status === 401 && authAttempt === 0) {
         unauthorized = true;
-        invalidateCodexAccessToken();
+        await invalidateCodexAccessToken();
         break;
       }
       if (response.status === 404) continue;
@@ -164,4 +169,15 @@ export async function getCodexUsage(): Promise<CodexUsage> {
   }
 
   throw new Error('Codex usage information is unavailable.');
+}
+
+/** Requests usage through the background credential owner. */
+export async function requestCodexUsage(): Promise<CodexUsage> {
+  const result = await browser.runtime.sendMessage({
+    type: CODEX_USAGE_MESSAGE,
+  }) as { ok?: boolean; usage?: CodexUsage; error?: string } | undefined;
+  if (!result?.ok || !result.usage) {
+    throw new Error(result?.error || 'Codex usage information is unavailable.');
+  }
+  return result.usage;
 }

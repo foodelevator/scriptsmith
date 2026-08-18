@@ -14,7 +14,7 @@
   import { hasCodexSubscription } from '../../utils/codex-auth';
   import {
     MAX_REVIEWABLE_CODE_CHARS,
-    reviewScriptFile,
+    requestScriptReview,
     type ScriptReview,
   } from '../../utils/script-review';
   import {
@@ -166,7 +166,7 @@
     reviewAbort = new AbortController();
     const requested = pendingImport;
     try {
-      const result = await reviewScriptFile(requested, reviewAbort.signal);
+      const result = await requestScriptReview(requested, reviewAbort.signal);
       if (pendingImport === requested) review = result;
     } catch (caught) {
       if (pendingImport === requested) reviewError = messageFor(caught);

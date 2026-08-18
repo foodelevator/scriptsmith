@@ -425,6 +425,10 @@ async function startChat(sessionId: string, settings: ChatSettings): Promise<voi
   }
 }
 
+export function abortSidebarCodexRequests(): void {
+  for (const controller of controllers.values()) controller.abort();
+}
+
 export function startSidebarCoordinator(): void {
   void reconcileSidebarSessions();
   browser.tabs.onCreated.addListener(() => void reconcileSidebarSessions());

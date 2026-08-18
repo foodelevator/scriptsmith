@@ -1,6 +1,7 @@
 export const CODEX_REFRESH_TOKEN_STORAGE_KEY = 'codexRefreshToken';
 export const CODEX_LOGIN_STATE_STORAGE_KEY = 'codexLoginState';
 export const CODEX_LOGIN_MESSAGE = 'scriptsmith:codex-login:start';
+export const CODEX_SIGN_OUT_MESSAGE = 'scriptsmith:codex-login:sign-out';
 
 const CODEX_ACCESS_TOKEN_STORAGE_KEY = 'codexAccessToken';
 const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -8,6 +9,7 @@ const AUTH_BASE_URL = 'https://auth.openai.com';
 const LOGIN_CALLBACK_URL = 'http://localhost:1455/auth/callback';
 const LOGIN_TIMEOUT_MS = 15 * 60_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+const REVOCATION_TIMEOUT_MS = 10_000;
 const JWT_AUTH_CLAIM = 'https://api.openai.com/auth';
 
 export interface CodexLoginState {
@@ -21,8 +23,19 @@ interface OAuthTokenResponse {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
-  error?: string;
+  error?: string | { code?: string; message?: string };
   error_description?: string;
+  code?: string;
+}
+
+class OAuthRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+    this.name = 'OAuthRequestError';
+  }
 }
 
 export interface CodexCredentials {
@@ -30,11 +43,20 @@ export interface CodexCredentials {
   accountId: string;
 }
 
+export interface CodexSignOutResult {
+  revoked: boolean;
+}
+
 type CachedCredentials = CodexCredentials & { expiresAt: number };
 
 let cachedCredentials: CachedCredentials | null = null;
 let refreshPromise: Promise<CodexCredentials> | null = null;
 let loginPromise: Promise<CodexLoginState> | null = null;
+let storageAccessPromise: Promise<void> | null = null;
+let authOwner = false;
+let authRevision = 0;
+let signingOut = false;
+const activeRequestControllers = new Set<AbortController>();
 
 function messageFor(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
@@ -43,9 +65,10 @@ function messageFor(caught: unknown): string {
 async function fetchWithTimeout(
   input: string,
   init: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (error) {
@@ -56,16 +79,26 @@ async function fetchWithTimeout(
   }
 }
 
-async function responseError(response: Response, fallback: string): Promise<Error> {
+async function responseError(response: Response, fallback: string): Promise<OAuthRequestError> {
   const text = await response.text().catch(() => '');
   let detail = text;
+  let code = '';
   try {
     const body = JSON.parse(text) as OAuthTokenResponse;
-    detail = body.error_description || body.error || text;
+    const oauthError = body.error;
+    code = typeof oauthError === 'string'
+      ? oauthError
+      : oauthError?.code || body.code || '';
+    detail = body.error_description
+      || (typeof oauthError === 'object' ? oauthError?.message : oauthError)
+      || text;
   } catch {
     // Keep the response text.
   }
-  return new Error(detail ? `${fallback}: ${detail}` : fallback);
+  return new OAuthRequestError(
+    detail ? `${fallback}: ${detail}` : fallback,
+    code.toLowerCase(),
+  );
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> {
@@ -91,6 +124,51 @@ function accountIdFromToken(token: string): string {
     throw new Error('The OpenAI access token does not contain a ChatGPT account.');
   }
   return accountId;
+}
+
+async function requireAuthOwner(): Promise<void> {
+  if (!authOwner) {
+    throw new Error('Authentication credentials are only available to the background service.');
+  }
+  await storageAccessPromise;
+  if (signingOut) throw new Error('ChatGPT is being disconnected.');
+}
+
+/**
+ * Makes the background service the sole credential owner and prevents content
+ * scripts from reading or observing either token storage area.
+ */
+export function initializeCodexAuth(): Promise<void> {
+  authOwner = true;
+  if (!storageAccessPromise) {
+    storageAccessPromise = (async () => {
+      await browser.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+      await browser.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+    })().catch(async (caught: unknown) => {
+      cachedCredentials = null;
+      await Promise.allSettled([
+        browser.storage.local.remove(CODEX_REFRESH_TOKEN_STORAGE_KEY),
+        browser.storage.session.remove(CODEX_ACCESS_TOKEN_STORAGE_KEY),
+      ]);
+      throw new Error(`Could not protect ChatGPT credentials: ${messageFor(caught)}`);
+    });
+  }
+  return storageAccessPromise;
+}
+
+export function isTrustedExtensionSender(sender: Browser.runtime.MessageSender): boolean {
+  const extensionRoot = browser.runtime.getURL('');
+  return typeof sender.url === 'string'
+    && sender.url.startsWith(extensionRoot);
+}
+
+/** Registers a background Codex request so sign-out can stop it immediately. */
+export function trackCodexRequest(controller: AbortController): () => void {
+  if (!authOwner) {
+    throw new Error('Codex requests must run in the background service.');
+  }
+  activeRequestControllers.add(controller);
+  return () => activeRequestControllers.delete(controller);
 }
 
 async function readRefreshToken(): Promise<string> {
@@ -133,15 +211,31 @@ async function tokenRequest(parameters: Record<string, string>): Promise<OAuthTo
     body: new URLSearchParams(parameters),
   });
   if (!response.ok) {
-    if (response.status === 400 || response.status === 401) {
-      cachedCredentials = null;
-    }
     throw await responseError(response, `OpenAI authentication failed (${response.status})`);
   }
   return response.json() as Promise<OAuthTokenResponse>;
 }
 
+async function clearStoredCredentials(): Promise<void> {
+  cachedCredentials = null;
+  await Promise.all([
+    browser.storage.local.remove(CODEX_REFRESH_TOKEN_STORAGE_KEY),
+    browser.storage.session.remove(CODEX_ACCESS_TOKEN_STORAGE_KEY),
+  ]);
+}
+
+function isPermanentRefreshError(caught: unknown): boolean {
+  if (!(caught instanceof OAuthRequestError)) return false;
+  return [
+    'invalid_grant',
+    'refresh_token_expired',
+    'refresh_token_reused',
+    'refresh_token_invalidated',
+  ].includes(caught.code);
+}
+
 async function refreshCredentials(): Promise<CodexCredentials> {
+  const revision = authRevision;
   const refreshToken = await readRefreshToken();
   if (!refreshToken) throw new Error('Sign in with ChatGPT before chatting.');
 
@@ -153,16 +247,24 @@ async function refreshCredentials(): Promise<CodexCredentials> {
       client_id: CODEX_CLIENT_ID,
     });
   } catch (error) {
-    if (/\(400\)|\(401\)|invalid.grant|expired|revoked/i.test(messageFor(error))) {
-      await browser.storage.local.remove(CODEX_REFRESH_TOKEN_STORAGE_KEY);
+    if (revision === authRevision && isPermanentRefreshError(error)) {
+      await clearStoredCredentials();
     }
     throw error;
   }
 
-  if (!tokens.access_token) throw new Error('OpenAI did not return an access token.');
   const nextRefreshToken = tokens.refresh_token || refreshToken;
+  if (revision !== authRevision || signingOut) {
+    await revokeRefreshToken(nextRefreshToken);
+    throw new Error('ChatGPT was disconnected while credentials were refreshing.');
+  }
+  if (!tokens.access_token) throw new Error('OpenAI did not return an access token.');
   if (nextRefreshToken !== refreshToken) await saveRefreshToken(nextRefreshToken);
 
+  if (revision !== authRevision || signingOut) {
+    await revokeRefreshToken(nextRefreshToken);
+    throw new Error('ChatGPT was disconnected while credentials were refreshing.');
+  }
   const credentials: CachedCredentials = {
     accessToken: tokens.access_token,
     accountId: accountIdFromToken(tokens.access_token),
@@ -173,6 +275,7 @@ async function refreshCredentials(): Promise<CodexCredentials> {
 }
 
 export async function getCodexCredentials(forceRefresh = false): Promise<CodexCredentials> {
+  await requireAuthOwner();
   if (!(await readRefreshToken())) {
     cachedCredentials = null;
     throw new Error('Sign in with ChatGPT before chatting.');
@@ -195,9 +298,10 @@ export async function getCodexCredentials(forceRefresh = false): Promise<CodexCr
   return refreshPromise;
 }
 
-export function invalidateCodexAccessToken(): void {
+export async function invalidateCodexAccessToken(): Promise<void> {
+  await requireAuthOwner();
   cachedCredentials = null;
-  void browser.storage.session.remove(CODEX_ACCESS_TOKEN_STORAGE_KEY);
+  await browser.storage.session.remove(CODEX_ACCESS_TOKEN_STORAGE_KEY);
 }
 
 export async function hasCodexSubscription(): Promise<boolean> {
@@ -327,7 +431,9 @@ async function captureAuthorizationCallback(authorizationUrl: string): Promise<s
 }
 
 async function runCodexLogin(): Promise<CodexLoginState> {
+  await requireAuthOwner();
   await cancelCodexLogin();
+  const revision = authRevision;
   const state: CodexLoginState = {
     id: crypto.randomUUID(),
     status: 'pending',
@@ -376,11 +482,17 @@ async function runCodexLogin(): Promise<CodexLoginState> {
       code_verifier: verifier,
     });
     if (!tokens.refresh_token) throw new Error('OpenAI did not return a refresh token.');
-    if (!(await isCurrentLogin(state.id))) {
+    if (!(await isCurrentLogin(state.id)) || revision !== authRevision || signingOut) {
+      await revokeRefreshToken(tokens.refresh_token);
       throw new Error('ChatGPT sign-in was cancelled.');
     }
 
     await saveRefreshToken(tokens.refresh_token);
+    if (revision !== authRevision || signingOut) {
+      await revokeRefreshToken(tokens.refresh_token);
+      await clearStoredCredentials();
+      throw new Error('ChatGPT sign-in was cancelled.');
+    }
     if (tokens.access_token) {
       await cacheCredentials({
         accessToken: tokens.access_token,
@@ -388,9 +500,20 @@ async function runCodexLogin(): Promise<CodexLoginState> {
         expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
       });
     }
+    if (revision !== authRevision || signingOut) {
+      await revokeRefreshToken(tokens.refresh_token);
+      await clearStoredCredentials();
+      throw new Error('ChatGPT sign-in was cancelled.');
+    }
 
     const complete: CodexLoginState = { ...state, status: 'complete' };
     await setLoginState(complete);
+    if (revision !== authRevision || signingOut) {
+      await revokeRefreshToken(tokens.refresh_token);
+      await clearStoredCredentials();
+      await cancelCodexLogin();
+      throw new Error('ChatGPT sign-in was cancelled.');
+    }
     return complete;
   } catch (error) {
     console.error('scriptsmith ChatGPT sign-in failed:', error);
@@ -406,6 +529,9 @@ async function runCodexLogin(): Promise<CodexLoginState> {
 }
 
 export function startCodexLogin(): Promise<CodexLoginState> {
+  if (!authOwner) {
+    return Promise.reject(new Error('ChatGPT sign-in must be started by the background service.'));
+  }
   if (!loginPromise) {
     loginPromise = runCodexLogin().finally(() => {
       loginPromise = null;
@@ -418,13 +544,54 @@ export async function cancelCodexLogin(): Promise<void> {
   await browser.storage.session.remove(CODEX_LOGIN_STATE_STORAGE_KEY);
 }
 
-export async function signOutCodex(): Promise<void> {
-  cachedCredentials = null;
-  await cancelCodexLogin();
-  await Promise.all([
-    browser.storage.local.remove(CODEX_REFRESH_TOKEN_STORAGE_KEY),
-    browser.storage.session.remove(CODEX_ACCESS_TOKEN_STORAGE_KEY),
-  ]);
+async function revokeRefreshToken(token: string): Promise<boolean> {
+  try {
+    const response = await fetchWithTimeout(`${AUTH_BASE_URL}/oauth/revoke`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        token_type_hint: 'refresh_token',
+        client_id: CODEX_CLIENT_ID,
+      }),
+    }, REVOCATION_TIMEOUT_MS);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function signOutFromOwner(): Promise<CodexSignOutResult> {
+  await requireAuthOwner();
+  signingOut = true;
+  authRevision += 1;
+  for (const controller of activeRequestControllers) controller.abort();
+  activeRequestControllers.clear();
+  let revoked = false;
+  try {
+    await cancelCodexLogin();
+    const refreshing = refreshPromise;
+    if (refreshing) await refreshing.catch(() => undefined);
+    const refreshToken = await readRefreshToken();
+    revoked = !refreshToken || await revokeRefreshToken(refreshToken);
+  } finally {
+    try {
+      await clearStoredCredentials();
+    } finally {
+      refreshPromise = null;
+      signingOut = false;
+    }
+  }
+  return { revoked };
+}
+
+export async function signOutCodex(): Promise<CodexSignOutResult> {
+  if (authOwner) return signOutFromOwner();
+  const result = await browser.runtime.sendMessage({
+    type: CODEX_SIGN_OUT_MESSAGE,
+  }) as { ok?: boolean; revoked?: boolean; error?: string } | undefined;
+  if (!result?.ok) throw new Error(result?.error || 'Could not disconnect ChatGPT.');
+  return { revoked: result.revoked === true };
 }
 
 export async function resumeCodexLogin(): Promise<void> {
