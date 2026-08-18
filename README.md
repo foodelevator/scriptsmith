@@ -61,3 +61,9 @@ npm run dev:firefox
 The Firefox scripts pass `--mv3`. Manifest V3 is required there because Firefox only exposes the User Scripts API used here under MV3, and only as an optional permission the extension requests at runtime.
 
 Create a production build with `npm run build` or `npm run build:firefox`.
+
+## Chrome Web Store review material
+
+- [Reviewer instructions](docs/chrome-web-store-review.md)
+- [Arbitrary JavaScript source-to-execution analysis](docs/user-script-execution.md)
+- [Draft remote-code declaration](docs/remote-code-declaration.md)
