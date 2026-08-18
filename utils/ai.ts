@@ -1,6 +1,7 @@
 import {
   getCodexCredentials,
   invalidateCodexAccessToken,
+  trackCodexRequest,
 } from './codex-auth';
 import {
   addOriginToScript,
@@ -706,6 +707,7 @@ async function createResponse(
   signal?: AbortSignal,
 ): Promise<StreamedResponse> {
   const controller = new AbortController();
+  const stopTracking = trackCodexRequest(controller);
   let timedOut = false;
   const abort = () => controller.abort();
   const timeout = setTimeout(() => {
@@ -750,7 +752,7 @@ async function createResponse(
       );
 
       if (response.status === 401 && attempt === 0) {
-        invalidateCodexAccessToken();
+        await invalidateCodexAccessToken();
         continue;
       }
       if (!response.ok) {
@@ -770,6 +772,7 @@ async function createResponse(
     }
     throw error;
   } finally {
+    stopTracking();
     clearTimeout(timeout);
     signal?.removeEventListener('abort', abort);
   }

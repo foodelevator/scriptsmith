@@ -18,7 +18,7 @@
     type CodexLoginState,
   } from '../../utils/codex-auth';
   import {
-    getCodexUsage,
+    requestCodexUsage,
     type CodexUsage,
   } from '../../utils/codex-usage';
   import {
@@ -83,7 +83,7 @@
     usageLoading = true;
     usageError = '';
     try {
-      codexUsage = await getCodexUsage();
+      codexUsage = await requestCodexUsage();
     } catch (caught) {
       codexUsage = null;
       usageError = messageFor(caught);
@@ -152,13 +152,15 @@
     error = '';
     status = '';
     try {
-      await signOutCodex();
+      const { revoked } = await signOutCodex();
       signedIn = false;
       signingIn = false;
       loginState = null;
       codexUsage = null;
       usageError = '';
-      status = 'Signed out of ChatGPT.';
+      status = revoked
+        ? 'Signed out of ChatGPT and revoked this connection.'
+        : 'Disconnected locally, but OpenAI could not confirm revocation. Remove scriptsmith in ChatGPT security settings to revoke it.';
     } catch (caught) {
       error = messageFor(caught);
     }
