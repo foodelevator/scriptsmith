@@ -349,7 +349,8 @@ h2,
   outline-offset: 2px;
 }
 
-.trust {
+.trust,
+.remove-dialog {
   display: none;
   width: min(540px, calc(100vw - 32px));
   max-height: min(680px, calc(100vh - 48px));
@@ -362,16 +363,19 @@ h2,
   box-shadow: 0 18px 48px light-dark(rgb(16 24 40 / 18%), rgb(0 0 0 / 55%));
 }
 
-.trust[open] {
+.trust[open],
+.remove-dialog[open] {
   display: grid;
   gap: 14px;
 }
 
-.trust::backdrop {
+.trust::backdrop,
+.remove-dialog::backdrop {
   background: light-dark(rgb(16 24 40 / 34%), rgb(0 0 0 / 58%));
 }
 
-.trust h2 {
+.trust h2,
+.remove-dialog h2 {
   overflow-wrap: anywhere;
   color: var(--text);
   font-size: 17px;
@@ -380,6 +384,19 @@ h2,
   text-transform: none;
 }
 
+.remove-dialog {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.confirm-remove {
+  background: var(--danger-bg);
+}
+
+.confirm-remove:hover:not(:disabled) {
+  background: var(--danger-bg-hover);
+}
+
+.remove-dialog p,
 .trust-lead,
 .trust-note,
 .trust-description,
@@ -558,14 +575,16 @@ h2,
   line-height: 1.45;
 }
 
-.trust-actions {
+.trust-actions,
+.remove-dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 9px;
   margin-top: 2px;
 }
 
-.trust-actions button {
+.trust-actions button,
+.remove-dialog-actions button {
   padding: 9px 15px;
   font-size: 13px;
 }

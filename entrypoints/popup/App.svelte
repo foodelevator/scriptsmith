@@ -41,6 +41,9 @@
   let working = false;
   let openingManager = false;
   let togglingScriptId: string | null = null;
+  let removeDialog: HTMLDialogElement;
+  let pendingRemoval: PageScript | null = null;
+  let removing = false;
   let reloadRequired = false;
   let reloading = false;
   let signedIn = false;
@@ -246,15 +249,18 @@
     }
   }
 
-  async function remove(script: PageScript): Promise<void> {
-    if (working || openingManager || togglingScriptId !== null) return;
+  function remove(script: PageScript): void {
+    if (working || openingManager || togglingScriptId !== null || pendingRemoval || removing) return;
     error = '';
     status = '';
+    pendingRemoval = script;
+    removeDialog.showModal();
+  }
 
-    const confirmed = window.confirm(
-      `Remove “${script.name}”?\n\nThis permanently deletes the script and cannot be undone.`,
-    );
-    if (!confirmed) return;
+  async function confirmRemoval(): Promise<void> {
+    if (!pendingRemoval || removing) return;
+    const script = pendingRemoval;
+    removing = true;
 
     try {
       await removePageScript(script);
@@ -262,6 +268,9 @@
       status = `${script.name} removed.`;
     } catch (caught) {
       error = messageFor(caught);
+    } finally {
+      removing = false;
+      removeDialog.close();
     }
   }
 
@@ -404,7 +413,7 @@
                 type="button"
                 aria-label={`Remove ${script.name}`}
                 title={`Remove ${script.name}`}
-                on:click={() => void remove(script)}
+                on:click={() => remove(script)}
                 disabled={working || openingManager || togglingScriptId !== null}
               >×</button>
               <button
@@ -536,3 +545,30 @@
   {#if error}<p class="message error" role="alert">{error}</p>{/if}
   {#if status}<p class="message success" role="status">{status}</p>{/if}
 </main>
+
+<dialog
+  class="remove-dialog"
+  bind:this={removeDialog}
+  aria-labelledby="remove-title"
+  aria-describedby="remove-description"
+  aria-busy={removing}
+  on:cancel={(event) => { if (removing) event.preventDefault(); }}
+  on:close={() => { pendingRemoval = null; }}
+>
+  <h2 id="remove-title">Remove “{pendingRemoval?.name ?? ''}”?</h2>
+  <p id="remove-description">This permanently deletes the script and cannot be undone.</p>
+  <div class="remove-dialog-actions">
+    <button
+      class="secondary"
+      type="button"
+      on:click={() => removeDialog.close()}
+      disabled={removing}
+    >Cancel</button>
+    <button
+      class="confirm-remove"
+      type="button"
+      on:click={() => void confirmRemoval()}
+      disabled={removing}
+    >{removing ? 'Removing…' : 'Remove'}</button>
+  </div>
+</dialog>
